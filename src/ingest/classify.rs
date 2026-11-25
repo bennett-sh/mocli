@@ -2,8 +2,8 @@
 
 use url::Url;
 
-use super::color::is_color;
-use crate::{capture::Snapshot, store::Kind};
+use super::code::{self, Language};
+use crate::{capture::Snapshot, color::Color, store::Kind};
 
 /// The one representation an entry is built from.
 #[derive(Debug, PartialEq, Eq)]
@@ -32,17 +32,29 @@ pub fn primary(snapshot: &Snapshot) -> Option<Primary> {
     }
 }
 
-/// Classifies text that has already been trimmed.
-pub fn text_kind(text: &str) -> Kind {
-    if is_color(text) {
-        Kind::Color
+/// Classifies text that has already been trimmed, with the language of code.
+pub fn text_kind(text: &str) -> (Kind, Option<Language>) {
+    if Color::parse(text).is_some() {
+        (Kind::Color, None)
     } else if is_email(text) {
-        Kind::Email
+        (Kind::Email, None)
     } else if is_link(text) {
-        Kind::Link
+        (Kind::Link, None)
+    } else if is_svg(text) {
+        (Kind::Svg, Some(code::XML))
     } else {
-        Kind::Text
+        match code::detect(text) {
+            Some(language) => (Kind::Code, Some(language)),
+            None => (Kind::Text, None),
+        }
     }
+}
+
+/// A whole SVG document, possibly after an XML declaration or comment.
+fn is_svg(text: &str) -> bool {
+    let opens = text.starts_with("<svg")
+        || (text.starts_with("<?xml") || text.starts_with("<!--")) && text.contains("<svg");
+    opens && (text.ends_with("</svg>") || text.starts_with("<svg") && text.ends_with("/>"))
 }
 
 fn is_single_word(text: &str) -> bool {
@@ -116,8 +128,16 @@ mod tests {
             ("a@b.c", Kind::Text),
             ("pkg@1.2.3", Kind::Text),
             ("two words", Kind::Text),
+            (
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>",
+                Kind::Svg,
+            ),
+            ("<?xml version=\"1.0\"?><svg></svg>", Kind::Svg),
+            ("<svg viewBox=\"0 0 1 1\"/>", Kind::Svg),
+            ("<svg> is an element", Kind::Text),
+            ("fn main() {\n    println!(\"hi\");\n}", Kind::Code),
         ] {
-            assert_eq!(text_kind(text), kind, "{text:?}");
+            assert_eq!(text_kind(text).0, kind, "{text:?}");
         }
     }
 

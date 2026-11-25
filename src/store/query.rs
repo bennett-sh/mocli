@@ -27,6 +27,7 @@ pub struct Summary {
     pub title: String,
     pub pinned: bool,
     pub last_copied: i64,
+    /// A picture for the row, if the entry has one.
     pub thumbnail: Option<PathBuf>,
 }
 
@@ -42,17 +43,36 @@ pub struct Results {
 #[derive(Debug)]
 pub struct Details {
     pub kind: Kind,
+    pub pinned: bool,
     /// Cut off after a few thousand characters.
     pub text: Option<String>,
     pub characters: usize,
     pub words: usize,
+    pub lines: usize,
     pub size_bytes: u64,
     pub dimensions: Option<(u32, u32)>,
+    /// The highlighter's name for the language of code.
+    pub language: Option<String>,
+    pub source_exe: Option<String>,
     pub source_name: Option<String>,
     pub source_title: Option<String>,
+    pub source_icon: Option<PathBuf>,
     pub last_copied: i64,
     pub copy_count: i64,
+    /// The stored picture of an image or SVG entry.
     pub image: Option<PathBuf>,
+    /// The icon of a single file.
+    pub thumbnail: Option<PathBuf>,
+    pub link: LinkDetails,
+}
+
+/// What a link preview found, if one was fetched.
+#[derive(Debug, Default)]
+pub struct LinkDetails {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image: Option<PathBuf>,
+    pub icon: Option<PathBuf>,
 }
 
 /// What goes back on the clipboard.
@@ -64,13 +84,32 @@ pub struct Payload {
     pub formats: Vec<(Format, Vec<u8>)>,
 }
 
+fn existing(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then_some(path)
+}
+
+/// A condition limiting results to `kinds`, with its values. `None` for all.
+fn kind_condition(kinds: &[Kind]) -> Option<(String, Vec<Value>)> {
+    if kinds.is_empty() {
+        return None;
+    }
+    let placeholders = vec!["?"; kinds.len()].join(", ");
+    let values = kinds
+        .iter()
+        .map(|kind| Value::from(kind.as_str().to_owned()))
+        .collect();
+    Some((format!("kind IN ({placeholders})"), values))
+}
+
 impl Store {
-    pub fn search(&self, query: &str, kind: Option<Kind>, limit: usize) -> Result<Results> {
-        let mut conditions = Vec::new();
+    /// Searches entries of the given kinds, or of every kind if none are given.
+    pub fn search(&self, query: &str, kinds: &[Kind], limit: usize) -> Result<Results> {
+        let kind_filter = kind_condition(kinds);
+        let mut conditions: Vec<&str> = Vec::new();
         let mut values = Vec::new();
-        if let Some(kind) = kind {
-            conditions.push("kind = ?");
-            values.push(Value::from(kind.as_str().to_owned()));
+        if let Some((condition, names)) = &kind_filter {
+            conditions.push(condition);
+            values.extend(names.clone());
         }
 
         // The trigram index cannot find words shorter than three characters.
@@ -88,20 +127,21 @@ impl Store {
         for word in &short {
             conditions.push(
                 r"(title LIKE ? ESCAPE '\' OR text LIKE ? ESCAPE '\'
-                   OR source_name LIKE ? ESCAPE '\')",
+                   OR source_name LIKE ? ESCAPE '\' OR link_title LIKE ? ESCAPE '\'
+                   OR ocr_text LIKE ? ESCAPE '\')",
             );
             let pattern = word
                 .replace('\\', r"\\")
                 .replace('%', r"\%")
                 .replace('_', r"\_");
-            values.extend(std::iter::repeat_n(Value::from(format!("%{pattern}%")), 3));
+            values.extend(std::iter::repeat_n(Value::from(format!("%{pattern}%")), 5));
         }
 
         let matches = self.summaries(&conditions, values, limit)?;
         let similar = if long.is_empty() {
             Vec::new()
         } else {
-            self.similar(query, kind, &matches, limit)?
+            self.similar(query, kinds, &matches, limit)?
         };
         Ok(Results { matches, similar })
     }
@@ -109,15 +149,13 @@ impl Store {
     fn similar(
         &self,
         query: &str,
-        kind: Option<Kind>,
+        kinds: &[Kind],
         exclude: &[Summary],
         limit: usize,
     ) -> Result<Vec<Summary>> {
-        let (conditions, values) = match kind {
-            Some(kind) => (
-                vec!["kind = ?"],
-                vec![Value::from(kind.as_str().to_owned())],
-            ),
+        let kind_filter = kind_condition(kinds);
+        let (conditions, values) = match &kind_filter {
+            Some((condition, names)) => (vec![condition.as_str()], names.clone()),
             None => (Vec::new(), Vec::new()),
         };
         let excluded: HashSet<i64> = exclude.iter().map(|entry| entry.id).collect();
@@ -166,20 +204,24 @@ impl Store {
              ORDER BY pinned DESC, last_copied DESC, id DESC LIMIT ?"
         ))?;
         let rows = query.query_map(params_from_iter(values), |row| {
-            let kind = Kind::parse(&row.get::<_, String>(1)?);
-            Ok(match kind {
-                Some(kind) => Some(Summary {
-                    id: row.get(0)?,
-                    kind,
-                    title: row.get(2)?,
-                    pinned: row.get(3)?,
-                    last_copied: row.get(4)?,
-                    thumbnail: (kind == Kind::Image)
-                        .then(|| row.get(5).map(|hash| self.blobs.thumbnail(&hex(hash))))
-                        .transpose()?,
-                }),
-                None => None,
-            })
+            let Some(kind) = Kind::parse(&row.get::<_, String>(1)?) else {
+                return Ok(None);
+            };
+            let hash = hex(row.get(5)?);
+            Ok(Some(Summary {
+                id: row.get(0)?,
+                kind,
+                title: row.get(2)?,
+                pinned: row.get(3)?,
+                last_copied: row.get(4)?,
+                thumbnail: match kind {
+                    Kind::Image => Some(self.blobs.thumbnail(&hash)),
+                    Kind::Files => existing(self.blobs.thumbnail(&hash)),
+                    Kind::Link => existing(self.blobs.favicon(&hash)),
+                    Kind::Svg => existing(self.blobs.svg(&hash)),
+                    Kind::Text | Kind::Email | Kind::Color | Kind::Code => None,
+                },
+            }))
         })?;
         Ok(rows
             .filter_map(Result::transpose)
@@ -191,7 +233,8 @@ impl Store {
             .db
             .query_row(
                 "SELECT kind, text, size_bytes, width, height, source_name, source_title,
-                        last_copied, copy_count, hash
+                        last_copied, copy_count, hash, language, source_exe,
+                        link_title, link_description, pinned
                  FROM entries WHERE id = ?1",
                 [id],
                 |row| {
@@ -199,10 +242,11 @@ impl Store {
                         return Ok(None);
                     };
                     let mut text: Option<String> = row.get(1)?;
-                    let (mut characters, mut words) = (0, 0);
+                    let (mut characters, mut words, mut lines) = (0, 0, 0);
                     if let Some(text) = &mut text {
                         characters = text.chars().count();
                         words = text.split_whitespace().count();
+                        lines = text.lines().count();
                         if let Some((end, _)) = text.char_indices().nth(PREVIEW_CHARS) {
                             text.truncate(end);
                             text.push('…');
@@ -210,20 +254,40 @@ impl Store {
                     }
                     let width: Option<u32> = row.get(3)?;
                     let height: Option<u32> = row.get(4)?;
+                    let hash = hex(row.get(9)?);
+                    let source_exe: Option<String> = row.get(11)?;
                     Ok(Some(Details {
                         kind,
+                        pinned: row.get(14)?,
                         text,
                         characters,
                         words,
+                        lines,
                         size_bytes: row.get::<_, i64>(2)?.max(0) as u64,
                         dimensions: width.zip(height),
+                        language: row.get(10)?,
                         source_name: row.get(5)?,
                         source_title: row.get(6)?,
+                        source_icon: source_exe
+                            .as_deref()
+                            .and_then(|exe| existing(self.blobs.app_icon(exe))),
+                        source_exe,
                         last_copied: row.get(7)?,
                         copy_count: row.get(8)?,
-                        image: (kind == Kind::Image)
-                            .then(|| row.get(9).map(|hash| self.blobs.image(&hex(hash))))
-                            .transpose()?,
+                        image: match kind {
+                            Kind::Image => Some(self.blobs.image(&hash)),
+                            Kind::Svg => existing(self.blobs.svg(&hash)),
+                            _ => None,
+                        },
+                        thumbnail: (kind == Kind::Files)
+                            .then(|| existing(self.blobs.thumbnail(&hash)))
+                            .flatten(),
+                        link: LinkDetails {
+                            title: row.get(12)?,
+                            description: row.get(13)?,
+                            image: existing(self.blobs.link_image(&hash)),
+                            icon: existing(self.blobs.favicon(&hash)),
+                        },
                     }))
                 },
             )
@@ -305,7 +369,7 @@ mod tests {
     }
 
     fn search(store: &Store, query: &str) -> Results {
-        store.search(query, None, 100).unwrap()
+        store.search(query, &[], 100).unwrap()
     }
 
     #[test]
@@ -318,7 +382,7 @@ mod tests {
         let results = search(&store, "  ");
         assert_eq!(titles(&results.matches), ["one", "three", "two"]);
         assert!(results.similar.is_empty());
-        assert_eq!(store.search("", None, 2).unwrap().matches.len(), 2);
+        assert_eq!(store.search("", &[], 2).unwrap().matches.len(), 2);
     }
 
     #[test]
@@ -398,10 +462,10 @@ mod tests {
     fn kind_filter_applies_to_all_results() {
         let (_scratch, mut store) = filled("kinds", &["a picture of text"]);
         store.record(&picture("Image (1×1)", 9)).unwrap();
-        let images = store.search("", Some(Kind::Image), 10).unwrap();
+        let images = store.search("", &[Kind::Image, Kind::Svg], 10).unwrap();
         assert_eq!(titles(&images.matches), ["Image (1×1)"]);
         assert!(images.matches[0].thumbnail.as_ref().unwrap().is_file());
-        let filtered = store.search("pictre", Some(Kind::Image), 10).unwrap();
+        let filtered = store.search("pictre", &[Kind::Image], 10).unwrap();
         assert!(filtered.matches.is_empty() && filtered.similar.is_empty());
     }
 
@@ -409,13 +473,17 @@ mod tests {
     fn details_and_payload_describe_the_entry() {
         let scratch = Scratch::new("details");
         let mut store = Store::open(&scratch.0).unwrap();
-        let mut long = text(&"word ".repeat(3000), 1);
+        let mut long = text(&"word\n".repeat(3000), 1);
         long.formats = vec![(Format::Rtf, vec![2]), (Format::Html, vec![1])];
         let id = store.record(&long).unwrap().id;
 
         let details = store.details(id).unwrap().unwrap();
-        assert_eq!((details.characters, details.words), (15_000, 3000));
+        assert_eq!(
+            (details.characters, details.words, details.lines),
+            (15_000, 3000, 3000)
+        );
         assert_eq!(details.text.unwrap().chars().count(), PREVIEW_CHARS + 1);
+        assert!(details.source_icon.is_none() && details.link.title.is_none());
 
         let payload = store.payload(id).unwrap().unwrap();
         assert_eq!(payload.text.unwrap().len(), 15_000);

@@ -31,6 +31,11 @@ max_age_days = 90
 max_image_mb = 25
 capture = ["text", "image", "files"]
 
+[previews]
+# Download the title and picture of copied web links. This contacts those sites
+# as soon as you copy a link, so it is off by default.
+fetch_links = false
+
 [privacy]
 # Copies made in these programs are not saved.
 ignore_apps = ["1Password.exe", "Bitwarden.exe", "KeePass.exe", "KeePassXC.exe"]
@@ -44,7 +49,14 @@ pub struct Config {
     pub general: General,
     pub appearance: Appearance,
     pub history: History,
+    pub previews: Previews,
     pub privacy: Privacy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Previews {
+    pub fetch_links: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]

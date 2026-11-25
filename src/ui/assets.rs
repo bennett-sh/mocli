@@ -11,11 +11,15 @@ icon_assets!(
     [
         AtSign,
         ClipboardList,
+        CodeXml,
+        File,
         FileText,
         Files,
+        Folder,
         Image,
         Link,
         List,
+        PenTool,
         Pin,
         Pipette
     ]
@@ -49,16 +53,14 @@ mod tests {
 
     #[test]
     fn every_icon_in_use_is_embedded() {
-        let kinds = [
-            Kind::Text,
-            Kind::Link,
-            Kind::Email,
-            Kind::Color,
-            Kind::Image,
-            Kind::Files,
+        let others = [
+            IconName::List,
+            IconName::ClipboardList,
+            IconName::Pin,
+            IconName::File,
+            IconName::Folder,
         ];
-        let others = [IconName::List, IconName::ClipboardList, IconName::Pin];
-        for icon in kinds.map(kind_icon).into_iter().chain(others) {
+        for icon in Kind::ALL.map(kind_icon).into_iter().chain(others) {
             let path = icon.path();
             assert!(matches!(Assets.load(&path), Ok(Some(_))), "{path}");
         }

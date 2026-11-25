@@ -19,15 +19,16 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{
+    file_facts,
     history_list::{self, HistoryDelegate},
-    preview,
+    preview::{self, Selected},
     type_filter::{FILTERS, TypeFilter},
     when,
 };
 use crate::{
     config::Backdrop,
     platform::{Activation, Event},
-    store::{Details, Results, SharedStore},
+    store::{Kind, Results, SharedStore},
 };
 
 actions!(
@@ -80,7 +81,7 @@ pub struct Popup {
     search: Entity<InputState>,
     filter: Entity<SelectState<Vec<TypeFilter>>>,
     list: Entity<ListState<HistoryDelegate>>,
-    selected: Option<(i64, Details)>,
+    selected: Option<Selected>,
     /// Decoded pictures, dropped each time the popup reopens.
     images: Entity<RetainAllImageCache>,
     last_click: Option<(i64, Instant)>,
@@ -170,15 +171,15 @@ impl Popup {
     /// Runs the search again. With `keep`, the selected entry stays selected.
     pub fn refresh(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.search.read(cx).value();
-        let kind = self
+        let kinds = self
             .filter
             .read(cx)
             .selected_value()
-            .and_then(|filter| filter.0);
+            .map_or(&[][..], |filter| filter.kinds());
         let results = self
             .store
             .lock()
-            .search(&query, kind, LIMIT)
+            .search(&query, kinds, LIMIT)
             .unwrap_or_else(|error| {
                 tracing::error!(error = format!("{error:#}"), "search failed");
                 Results::default()
@@ -190,10 +191,10 @@ impl Popup {
             "results"
         );
 
-        let kept = self.selected.take().filter(|_| keep).map(|(id, _)| id);
+        let kept = keep.then(|| self.selected_id()).flatten();
         let target = self.list.update(cx, |list, cx| {
             let delegate = list.delegate_mut();
-            delegate.filtered = !query.is_empty() || kind.is_some();
+            delegate.filtered = !query.is_empty() || !kinds.is_empty();
             delegate.sections = history_list::sections(results, when::now().date());
             let target = kept
                 .and_then(|id| delegate.position_of(id).map(|index| (index, id)))
@@ -209,20 +210,54 @@ impl Popup {
     }
 
     fn load(&mut self, id: Option<i64>, cx: &mut Context<Self>) {
-        self.selected = id.and_then(|id| match self.store.lock().details(id) {
-            Ok(details) => details.map(|details| (id, details)),
-            Err(error) => {
-                tracing::error!(error = format!("{error:#}"), "could not load an entry");
-                None
-            }
+        // Reloading the same entry keeps how it is being viewed.
+        let show_source = self
+            .selected
+            .as_ref()
+            .is_some_and(|selected| selected.show_source && Some(selected.id) == id);
+        self.selected = id.and_then(|id| {
+            // Bound first, so reading the disk happens without the lock.
+            let details = self.store.lock().details(id);
+            let details = details
+                .inspect_err(|error| {
+                    tracing::error!(error = format!("{error:#}"), "could not load an entry")
+                })
+                .ok()
+                .flatten()?;
+            let file = (details.kind == Kind::Files && details.lines == 1)
+                .then(|| details.text.as_deref().map(file_facts::read))
+                .flatten();
+            Some(Selected {
+                id,
+                details,
+                file,
+                show_source,
+            })
         });
         tracing::debug!(id, "selected");
         cx.notify();
     }
 
+    fn selected_id(&self) -> Option<i64> {
+        self.selected.as_ref().map(|selected| selected.id)
+    }
+
+    pub fn toggle_source(&mut self, cx: &mut Context<Self>) {
+        if let Some(selected) = &mut self.selected {
+            selected.show_source = !selected.show_source;
+            cx.notify();
+        }
+    }
+
+    /// Asks the app to act on something the popup cannot do itself.
+    pub fn send(&self, event: Event) {
+        // Fails only during shutdown.
+        let _ = self.events.try_send(event);
+    }
+
     /// Moves by `step` rows. Single steps wrap around the ends.
     fn move_selection(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.selected.as_ref().map(|(id, _)| *id);
+        let current = self.selected_id();
         let target = self.list.update(cx, |list, cx| {
             let delegate = list.delegate();
             let count = delegate.len() as isize;
@@ -278,8 +313,8 @@ impl Popup {
     }
 
     fn activate(&mut self, how: Activation) {
-        if let Some((id, _)) = &self.selected {
-            let _ = self.events.try_send(Event::Activate { id: *id, how });
+        if let Some(id) = self.selected_id() {
+            self.send(Event::Activate { id, how });
         }
     }
 
@@ -296,7 +331,7 @@ impl Popup {
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The first Escape clears the search, the second closes.
         if self.search.read(cx).value().is_empty() {
-            let _ = self.events.try_send(Event::Hide);
+            self.send(Event::Hide);
         } else {
             self.search
                 .update(cx, |search, cx| search.set_value("", window, cx));
@@ -362,15 +397,17 @@ impl Render for Popup {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = self.header(cx).into_any_element();
         let footer = self.footer(cx).into_any_element();
+        // Taken out while rendering, which needs the context mutably.
+        let selected = self.selected.take();
+        let preview = selected
+            .as_ref()
+            .map(|selected| preview::preview(selected, cx).into_any_element());
+        self.selected = selected;
         let theme = cx.theme();
         let background = match self.backdrop {
             Backdrop::Acrylic => theme.background.opacity(0.72),
             Backdrop::Solid => theme.background,
         };
-        let preview = self
-            .selected
-            .as_ref()
-            .map(|(id, details)| preview::preview(*id, details, cx));
 
         v_flex()
             .key_context(CONTEXT)

@@ -8,17 +8,26 @@ anyhow = "1"
 async-channel = "2"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-gpui-kit = "0.11.0"
-image = { version = "0.25", default-features = false, features = ["bmp", "png"] }
+gpui-kit = { version = "0.11.0", features = ["syntect"] }
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "gif",
+    "ico",
+    "jpeg",
+    "png",
+    "webp",
+] }
 nucleo-matcher = "0.3"
 raw-window-handle = "0.6"
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = { version = "0.27", default-features = false }
+ureq = "3"
 url = "2"
 
 [dependencies.windows]
@@ -42,3 +51,8 @@ features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[dev-dependencies]
+# The version gpui-kit uses, with its headless test platform. Enabling
+# `test-support` through gpui-kit does not resolve with its current backends.
+gpui = { package = "gpui-pre", version = "=0.3.14", features = ["test-support"] }

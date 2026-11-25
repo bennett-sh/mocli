@@ -5,7 +5,7 @@ mod query;
 
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
@@ -15,9 +15,9 @@ use rusqlite::{Connection, params};
 
 use self::blobs::Blobs;
 pub use self::query::{Details, Payload, Results, Summary};
-use crate::capture::Source;
+use crate::{capture::Source, ingest::link::Preview};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,8 @@ pub enum Kind {
     Link,
     Email,
     Color,
+    Code,
+    Svg,
     Image,
     Files,
 }
@@ -37,22 +39,26 @@ impl Kind {
             Self::Link => "link",
             Self::Email => "email",
             Self::Color => "color",
+            Self::Code => "code",
+            Self::Svg => "svg",
             Self::Image => "image",
             Self::Files => "files",
         }
     }
 
+    pub const ALL: [Self; 8] = [
+        Self::Text,
+        Self::Link,
+        Self::Email,
+        Self::Color,
+        Self::Code,
+        Self::Svg,
+        Self::Image,
+        Self::Files,
+    ];
+
     fn parse(name: &str) -> Option<Self> {
-        [
-            Self::Text,
-            Self::Link,
-            Self::Email,
-            Self::Color,
-            Self::Image,
-            Self::Files,
-        ]
-        .into_iter()
-        .find(|kind| kind.as_str() == name)
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
 }
 
@@ -108,6 +114,8 @@ pub struct NewEntry {
     pub text: Option<String>,
     /// Identifies the content; copying it again updates the existing entry.
     pub hash: blake3::Hash,
+    /// The highlighter's name for the language of code.
+    pub language: Option<&'static str>,
     pub image: Option<Image>,
     pub size_bytes: u64,
     pub formats: Vec<(Format, Vec<u8>)>,
@@ -150,32 +158,76 @@ impl Store {
         migrate(&mut db)?;
 
         let store = Self { db, blobs };
-        store.blobs.remove_orphans(&store.image_hashes()?)?;
+        store.blobs.remove_orphans(&store.hashes()?)?;
         Ok(store)
     }
 
-    fn image_hashes(&self) -> Result<HashSet<String>> {
-        let mut query = self
-            .db
-            .prepare("SELECT hash FROM entries WHERE kind = 'image'")?;
+    fn hashes(&self) -> Result<HashSet<String>> {
+        let mut query = self.db.prepare("SELECT hash FROM entries")?;
         let hashes = query.query_map([], |row| row.get::<_, [u8; 32]>(0))?;
         hashes.map(|hash| Ok(hex(hash?))).collect::<Result<_>>()
+    }
+
+    /// The icon shown for a file entry.
+    pub fn set_thumbnail(&self, hash: blake3::Hash, png: &[u8]) -> Result<()> {
+        self.blobs
+            .write_file(&self.blobs.thumbnail(&hash.to_hex()), png)
+    }
+
+    /// Where the icon of the program at `exe` is kept, if it has been saved.
+    pub fn app_icon(&self, exe: &str) -> PathBuf {
+        self.blobs.app_icon(exe)
+    }
+
+    pub fn set_app_icon(&self, exe: &str, png: &[u8]) -> Result<()> {
+        self.blobs.write_file(&self.blobs.app_icon(exe), png)
+    }
+
+    pub fn set_link_preview(
+        &mut self,
+        id: i64,
+        hash: blake3::Hash,
+        preview: &Preview,
+    ) -> Result<()> {
+        let hash = hash.to_hex();
+        if let Some(image) = &preview.image {
+            self.blobs
+                .write_file(&self.blobs.link_image(&hash), image)?;
+        }
+        if let Some(icon) = &preview.icon {
+            self.blobs.write_file(&self.blobs.favicon(&hash), icon)?;
+        }
+        let updated = self.db.execute(
+            "UPDATE entries SET link_title = ?2, link_description = ?3 WHERE id = ?1",
+            params![id, preview.title, preview.description],
+        )?;
+        if updated == 0 {
+            // Deleted while the page was loading.
+            self.blobs.remove(&hash);
+        }
+        Ok(())
     }
 
     /// Adds an entry, or bumps the existing one with the same content.
     pub fn record(&mut self, entry: &NewEntry) -> Result<Recorded> {
         // Files first, so a row never points at a missing image.
+        let hash = entry.hash.to_hex();
         if let Some(image) = &entry.image {
+            self.blobs.write(&hash, &image.png, &image.thumbnail)?;
+        }
+        if entry.kind == Kind::Svg
+            && let Some(text) = &entry.text
+        {
             self.blobs
-                .write(&entry.hash.to_hex(), &image.png, &image.thumbnail)?;
+                .write_file(&self.blobs.svg(&hash), text.trim().as_bytes())?;
         }
 
         let source = entry.source.as_ref();
         let transaction = self.db.transaction()?;
         let (id, copies): (i64, i64) = transaction.query_row(
             "INSERT INTO entries (kind, title, text, hash, size_bytes, width, height,
-                 source_exe, source_name, source_title, first_copied, last_copied)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+                 source_exe, source_name, source_title, first_copied, last_copied, language)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)
              ON CONFLICT (hash) DO UPDATE SET
                  source_exe = excluded.source_exe,
                  source_name = excluded.source_name,
@@ -195,6 +247,7 @@ impl Store {
                 source.map(|source| &source.name),
                 source.and_then(|source| source.window_title.as_ref()),
                 entry.copied_at,
+                entry.language,
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -231,17 +284,13 @@ impl Store {
                  last_copied < ?1
                  OR id NOT IN (SELECT id FROM entries WHERE pinned = 0
                                ORDER BY last_copied DESC, id DESC LIMIT ?2))
-             RETURNING hash, kind = 'image'",
+             RETURNING hash",
         )?;
         let removed = query
-            .query_map(params![cutoff, limit], |row| {
-                Ok((row.get::<_, [u8; 32]>(0)?, row.get::<_, bool>(1)?))
-            })?
+            .query_map(params![cutoff, limit], |row| row.get::<_, [u8; 32]>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (hash, is_image) in &removed {
-            if *is_image {
-                self.blobs.remove(&hex(*hash));
-            }
+        for hash in &removed {
+            self.blobs.remove(&hex(*hash));
         }
         Ok(removed.len())
     }
@@ -257,10 +306,12 @@ fn migrate(db: &mut Connection) -> Result<()> {
         version <= SCHEMA_VERSION,
         "the history was written by a newer version of mocli"
     );
-    if version < 1 {
+    const STEPS: [&str; SCHEMA_VERSION as usize] =
+        [include_str!("schema.sql"), include_str!("migrate2.sql")];
+    for (step, sql) in STEPS.iter().enumerate().skip(version.max(0) as usize) {
         let transaction = db.transaction()?;
-        transaction.execute_batch(include_str!("schema.sql"))?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.execute_batch(sql)?;
+        transaction.pragma_update(None, "user_version", step as i64 + 1)?;
         transaction.commit()?;
     }
     Ok(())
@@ -268,7 +319,7 @@ fn migrate(db: &mut Connection) -> Result<()> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{fs, path::PathBuf};
+    use std::fs;
 
     use super::*;
 
@@ -300,6 +351,7 @@ pub mod tests {
             title: content.into(),
             text: Some(content.into()),
             hash: blake3::hash(content.as_bytes()),
+            language: None,
             image: None,
             size_bytes: content.len() as u64,
             formats: Vec::new(),
@@ -404,6 +456,54 @@ pub mod tests {
         assert_eq!(scratch.blob_count(), 4);
         store.prune(1, 0, 3).unwrap();
         assert_eq!(scratch.blob_count(), 2);
+    }
+
+    #[test]
+    fn upgrades_a_version_one_history() {
+        let scratch = Scratch::new("upgrade");
+        fs::create_dir_all(&scratch.0).unwrap();
+        let db = Connection::open(scratch.0.join("history.db")).unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute(
+            "INSERT INTO entries (kind, title, text, hash, size_bytes, first_copied, last_copied)
+             VALUES ('text', 'old entry', 'old entry', ?1, 9, 1, 1)",
+            [[7u8; 32]],
+        )
+        .unwrap();
+        db.pragma_update(None, "user_version", 1).unwrap();
+        drop(db);
+
+        let mut store = Store::open(&scratch.0).unwrap();
+        assert_eq!(matches(&store, "old"), 1);
+        store.record(&text("new entry", 2)).unwrap();
+        assert_eq!(matches(&store, "entry"), 2);
+        assert_eq!(count(&store, "PRAGMA user_version"), SCHEMA_VERSION);
+        store
+            .db
+            .execute_batch("INSERT INTO entries_fts (entries_fts) VALUES ('integrity-check')")
+            .unwrap();
+    }
+
+    #[test]
+    fn link_previews_are_searchable_and_cleaned_up() {
+        let scratch = Scratch::new("links");
+        let mut store = Store::open(&scratch.0).unwrap();
+        let entry = text("https://example.com", 1);
+        let id = store.record(&entry).unwrap().id;
+        let preview = Preview {
+            title: Some("Marvellous heading".into()),
+            description: None,
+            image: Some(vec![1]),
+            icon: Some(vec![2]),
+        };
+        store.set_link_preview(id, entry.hash, &preview).unwrap();
+        assert_eq!(matches(&store, "Marvellous"), 1);
+        assert_eq!(scratch.blob_count(), 2);
+        store.prune(0, 1, 10 * MILLIS_PER_DAY).unwrap();
+        assert_eq!(scratch.blob_count(), 0);
+        // A preview arriving for a deleted entry leaves nothing behind.
+        store.set_link_preview(id, entry.hash, &preview).unwrap();
+        assert_eq!(scratch.blob_count(), 0);
     }
 
     #[test]

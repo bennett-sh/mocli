@@ -1,13 +1,14 @@
 //! Turns clipboard snapshots into history entries.
 
 mod classify;
-mod color;
+pub mod code;
+pub mod link;
 mod picture;
 
 use std::{
     fs,
     path::PathBuf,
-    sync::mpsc::Receiver,
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,7 +18,8 @@ use anyhow::Result;
 use self::classify::Primary;
 use crate::{
     capture::Snapshot,
-    config::{CaptureKind, History},
+    config::{CaptureKind, History, Previews},
+    platform::shell_image,
     store::{Format, Image, Kind, NewEntry, SharedStore},
 };
 
@@ -26,6 +28,9 @@ pub use self::picture::decode;
 
 const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
+/// Edge length of the icons stored for files and source apps.
+const FILE_ICON_EDGE: u32 = 128;
+const APP_ICON_EDGE: u32 = 48;
 
 pub fn now_millis() -> i64 {
     SystemTime::now()
@@ -33,17 +38,27 @@ pub fn now_millis() -> i64 {
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
+/// A copied link waiting for its preview.
+struct LinkRequest {
+    id: i64,
+    hash: blake3::Hash,
+    address: String,
+}
+
 /// Stores every snapshot on a background thread until the sender is dropped,
 /// calling `changed` after each one.
 pub fn spawn(
     store: SharedStore,
     settings: History,
+    previews: Previews,
     snapshots: Receiver<Snapshot>,
-    changed: impl Fn() + Send + 'static,
+    changed: impl Fn() + Clone + Send + 'static,
 ) -> Result<()> {
+    let links = spawn_link_fetcher(store.clone(), changed.clone())?;
     thread::Builder::new()
         .name("ingest".into())
         .spawn(move || {
+            shell_image::init_thread();
             prune(&store, &settings);
             for snapshot in snapshots {
                 let entry = match process(snapshot, &settings) {
@@ -58,12 +73,22 @@ pub fn spawn(
                 // Bound first, so the lock is released before pruning.
                 let recorded = store.lock().record(&entry);
                 match recorded {
-                    Ok(recorded) => tracing::info!(
-                        id = recorded.id,
-                        kind = entry.kind.as_str(),
-                        new = recorded.new,
-                        "entry stored"
-                    ),
+                    Ok(recorded) => {
+                        tracing::info!(
+                            id = recorded.id,
+                            kind = entry.kind.as_str(),
+                            new = recorded.new,
+                            "entry stored"
+                        );
+                        add_icons(&store, &entry);
+                        if previews.fetch_links
+                            && recorded.new
+                            && let Some(request) = link_request(recorded.id, &entry)
+                        {
+                            // The fetcher lives as long as this thread.
+                            let _ = links.send(request);
+                        }
+                    }
                     Err(error) => {
                         tracing::error!(error = format!("{error:#}"), "could not store a copy")
                     }
@@ -73,6 +98,65 @@ pub fn spawn(
             }
         })?;
     Ok(())
+}
+
+fn link_request(id: i64, entry: &NewEntry) -> Option<LinkRequest> {
+    let address = entry.text.as_deref()?.trim();
+    (entry.kind == Kind::Link && link::is_fetchable(address)).then(|| LinkRequest {
+        id,
+        hash: entry.hash,
+        address: address.to_owned(),
+    })
+}
+
+/// Stores the pictures shown for copied files and for source apps.
+fn add_icons(store: &SharedStore, entry: &NewEntry) {
+    let render = |path: &str, edge| {
+        shell_image::render(path.as_ref(), edge).and_then(|pixels| picture::to_png(&pixels).ok())
+    };
+    // Several files share one generic icon.
+    if entry.kind == Kind::Files
+        && let Some(path) = entry.text.as_deref().filter(|text| !text.contains('\n'))
+        && let Some(icon) = render(path, FILE_ICON_EDGE)
+        && let Err(error) = store.lock().set_thumbnail(entry.hash, &icon)
+    {
+        tracing::warn!(error = format!("{error:#}"), "could not save a file icon");
+    }
+    if let Some(source) = &entry.source {
+        // Bound first: rendering must not hold the lock.
+        let missing = !store.lock().app_icon(&source.exe).is_file();
+        if missing
+            && let Some(icon) = render(&source.exe, APP_ICON_EDGE)
+            && let Err(error) = store.lock().set_app_icon(&source.exe, &icon)
+        {
+            tracing::warn!(error = format!("{error:#}"), "could not save an app icon");
+        }
+    }
+}
+
+/// Fetches previews one at a time, so a slow site never delays capturing.
+fn spawn_link_fetcher(
+    store: SharedStore,
+    changed: impl Fn() + Send + 'static,
+) -> Result<Sender<LinkRequest>> {
+    let (requests, incoming) = mpsc::channel::<LinkRequest>();
+    thread::Builder::new()
+        .name("link-previews".into())
+        .spawn(move || {
+            for request in incoming {
+                let saved = link::fetch(&request.address).and_then(|preview| {
+                    store
+                        .lock()
+                        .set_link_preview(request.id, request.hash, &preview)
+                });
+                // Addresses are clipboard content: log ids only.
+                match saved {
+                    Ok(()) => changed(),
+                    Err(_) => tracing::debug!(id = request.id, "no link preview"),
+                }
+            }
+        })?;
+    Ok(requests)
 }
 
 fn prune(store: &SharedStore, settings: &History) {
@@ -141,6 +225,7 @@ fn entry(kind: Kind, title: String, hash: blake3::Hash) -> NewEntry {
         title,
         text: None,
         hash,
+        language: None,
         image: None,
         size_bytes: 0,
         formats: Vec::new(),
@@ -171,8 +256,9 @@ fn title_of(text: &str) -> String {
 }
 
 fn text_entry(text: String) -> NewEntry {
-    let kind = classify::text_kind(text.trim());
+    let (kind, language) = classify::text_kind(text.trim());
     NewEntry {
+        language: language.map(|language| language.token),
         size_bytes: text.len() as u64,
         ..entry(kind, title_of(&text), hash("text", &[text.as_bytes()]))
     }

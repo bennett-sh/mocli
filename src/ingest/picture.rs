@@ -46,6 +46,18 @@ pub fn encode(raw: &RawImage) -> Result<Picture> {
     })
 }
 
+/// Re-encodes a picture in any supported format as a PNG no larger than
+/// `edge` pixels either way.
+pub fn shrink(data: &[u8], edge: u32) -> Result<Vec<u8>> {
+    let image = image::load_from_memory(data)?;
+    let image = if image.width().max(image.height()) > edge {
+        image.thumbnail(edge, edge)
+    } else {
+        image
+    };
+    to_png(&image.into_rgba8())
+}
+
 fn decode_dib(bytes: &[u8]) -> Result<RgbaImage> {
     let decoder = BmpDecoder::new_without_file_header(Cursor::new(bytes))?;
     let mut pixels = DynamicImage::from_decoder(decoder)?.into_rgba8();
@@ -56,7 +68,7 @@ fn decode_dib(bytes: &[u8]) -> Result<RgbaImage> {
     Ok(pixels)
 }
 
-fn to_png(pixels: &RgbaImage) -> Result<Vec<u8>> {
+pub fn to_png(pixels: &RgbaImage) -> Result<Vec<u8>> {
     let mut png = Cursor::new(Vec::new());
     pixels.write_to(&mut png, ImageFormat::Png)?;
     Ok(png.into_inner())

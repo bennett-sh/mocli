@@ -26,20 +26,43 @@ impl Blobs {
         self.0.join(format!("{hash}.thumb.png"))
     }
 
-    fn paths(&self, hash: &str) -> [PathBuf; 2] {
-        [self.image(hash), self.thumbnail(hash)]
+    pub fn svg(&self, hash: &str) -> PathBuf {
+        self.0.join(format!("{hash}.svg"))
+    }
+
+    pub fn link_image(&self, hash: &str) -> PathBuf {
+        self.0.join(format!("{hash}.link.png"))
+    }
+
+    pub fn favicon(&self, hash: &str) -> PathBuf {
+        self.0.join(format!("{hash}.icon.png"))
+    }
+
+    /// Icons of source apps are shared by their entries, so they are kept
+    /// apart from the files that belong to one entry.
+    pub fn app_icon(&self, exe: &str) -> PathBuf {
+        let name = blake3::hash(exe.to_lowercase().as_bytes()).to_hex();
+        self.0.join("apps").join(format!("{name}.png"))
     }
 
     pub fn write(&self, hash: &str, png: &[u8], thumbnail: &[u8]) -> Result<()> {
-        for (path, bytes) in self.paths(hash).iter().zip([png, thumbnail]) {
-            write_atomically(path, bytes)
-                .with_context(|| format!("could not write {}", path.display()))?;
-        }
-        Ok(())
+        self.write_file(&self.image(hash), png)?;
+        self.write_file(&self.thumbnail(hash), thumbnail)
     }
 
+    pub fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        write_atomically(path, bytes).with_context(|| format!("could not write {}", path.display()))
+    }
+
+    /// Deletes every file belonging to an entry.
     pub fn remove(&self, hash: &str) {
-        for path in self.paths(hash) {
+        for path in [
+            self.image(hash),
+            self.thumbnail(hash),
+            self.svg(hash),
+            self.link_image(hash),
+            self.favicon(hash),
+        ] {
             remove_file(&path);
         }
     }
@@ -48,6 +71,9 @@ impl Blobs {
     pub fn remove_orphans(&self, referenced: &HashSet<String>) -> Result<()> {
         for file in fs::read_dir(&self.0)? {
             let file = file?;
+            if file.file_type()?.is_dir() {
+                continue;
+            }
             let name = file.file_name();
             let hash = name.to_string_lossy();
             let hash = hash.split('.').next().unwrap_or_default();
@@ -61,6 +87,9 @@ impl Blobs {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
     fs::rename(temporary, path)

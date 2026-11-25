@@ -9,9 +9,11 @@ pub mod input;
 pub mod keyboard;
 mod placement;
 pub mod shell;
+pub mod shell_image;
 pub mod single_instance;
 mod source_app;
 pub mod tray;
+pub mod version;
 pub mod window;
 
 use gpui_kit::Keystroke;
@@ -55,6 +57,8 @@ pub enum Event {
         how: Activation,
     },
     HistoryChanged,
+    /// Put text on the clipboard and close, for values derived from an entry.
+    CopyText(String),
     OpenConfig,
     Quit,
 }

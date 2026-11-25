@@ -2,6 +2,7 @@
 
 mod app;
 mod capture;
+mod color;
 mod config;
 mod ingest;
 mod logging;

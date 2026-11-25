@@ -10,7 +10,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{kind_icon, when};
-use crate::store::{Results, Summary};
+use crate::{
+    color::Color,
+    store::{Kind, Results, Summary},
+};
 
 const ROW_HEIGHT: f32 = 40.0;
 
@@ -122,9 +125,20 @@ impl ListDelegate for HistoryDelegate {
             .rounded(theme.radius)
             .bg(theme.muted)
             .overflow_hidden();
-        let tile = match &entry.thumbnail {
-            Some(path) => tile.child(img(path.clone()).size_full().object_fit(ObjectFit::Cover)),
-            None => tile.child(Icon::new(kind_icon(entry.kind)).small()),
+        let swatch = (entry.kind == Kind::Color)
+            .then(|| Color::parse(&entry.title))
+            .flatten();
+        let tile = match (&entry.thumbnail, swatch) {
+            (Some(path), _) => {
+                // Photos fill the tile; icons must not be cropped.
+                let fit = match entry.kind {
+                    Kind::Image => ObjectFit::Cover,
+                    _ => ObjectFit::Contain,
+                };
+                tile.child(img(path.clone()).size_full().object_fit(fit))
+            }
+            (None, Some(color)) => tile.bg(rgba(color.to_rgba_u32())),
+            (None, None) => tile.child(Icon::new(kind_icon(entry.kind)).small()),
         };
 
         Some(

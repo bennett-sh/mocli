@@ -9,8 +9,10 @@ use crate::{
     config::{Backdrop, Config, FocusMode, Placement},
     ingest, paths,
     platform::{
-        Activation, Event, caret, clipboard, clipboard_write, cursor, foreground, hook, input,
-        shell, tray, window::PopupWindow,
+        Activation, Event, caret, clipboard,
+        clipboard_write::{self, Content},
+        cursor, foreground, hook, input, shell, tray,
+        window::PopupWindow,
     },
     reuse,
     store::{SharedStore, Store},
@@ -32,10 +34,16 @@ pub fn run(config: Config) -> Result<()> {
 
     let (snapshots, copies) = mpsc::channel();
     let changes = events.clone();
-    ingest::spawn(store.clone(), config.history, copies, move || {
-        // Fails only during shutdown.
-        let _ = changes.try_send(Event::HistoryChanged);
-    })?;
+    ingest::spawn(
+        store.clone(),
+        config.history,
+        config.previews,
+        copies,
+        move || {
+            // Fails only during shutdown.
+            let _ = changes.try_send(Event::HistoryChanged);
+        },
+    )?;
     clipboard::spawn(config.privacy, snapshots)?;
     let settings = Settings {
         backdrop: config.appearance.backdrop,
@@ -147,6 +155,16 @@ impl Controller {
         Ok(())
     }
 
+    fn copy_text(&mut self, text: String) -> Result<()> {
+        self.hide(true)?;
+        let content = Content::Text {
+            text,
+            html: None,
+            rtf: None,
+        };
+        clipboard_write::write(self.popup.handle(), &content)
+    }
+
     fn with_view(
         &self,
         cx: &mut AsyncApp,
@@ -207,8 +225,12 @@ fn start(
                 Event::HistoryChanged if controller.visible => {
                     controller.with_view(cx, |view, window, cx| view.refresh(true, window, cx))
                 }
+                Event::CopyText(text) if controller.visible => controller.copy_text(text),
                 // The popup closed before these arrived, or reloads when shown.
-                Event::Key(_) | Event::Activate { .. } | Event::HistoryChanged => Ok(()),
+                Event::Key(_)
+                | Event::Activate { .. }
+                | Event::CopyText(_)
+                | Event::HistoryChanged => Ok(()),
                 Event::OpenConfig => {
                     paths::config_file().and_then(|path| shell::edit_text_file(&path))
                 }

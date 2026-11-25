@@ -7,35 +7,62 @@ use gpui_kit::*;
 use super::kind_icon;
 use crate::store::Kind;
 
-/// `None` shows every kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TypeFilter(pub Option<Kind>);
+pub enum TypeFilter {
+    All,
+    Text,
+    Images,
+    Files,
+    Links,
+    Emails,
+    Colors,
+    Code,
+}
 
-pub const FILTERS: [TypeFilter; 7] = [
-    TypeFilter(None),
-    TypeFilter(Some(Kind::Text)),
-    TypeFilter(Some(Kind::Image)),
-    TypeFilter(Some(Kind::Files)),
-    TypeFilter(Some(Kind::Link)),
-    TypeFilter(Some(Kind::Email)),
-    TypeFilter(Some(Kind::Color)),
+pub const FILTERS: [TypeFilter; 8] = [
+    TypeFilter::All,
+    TypeFilter::Text,
+    TypeFilter::Images,
+    TypeFilter::Files,
+    TypeFilter::Links,
+    TypeFilter::Emails,
+    TypeFilter::Colors,
+    TypeFilter::Code,
 ];
 
 impl TypeFilter {
+    /// The kinds shown; none means all of them.
+    pub fn kinds(self) -> &'static [Kind] {
+        match self {
+            Self::All => &[],
+            Self::Text => &[Kind::Text],
+            Self::Images => &[Kind::Image, Kind::Svg],
+            Self::Files => &[Kind::Files],
+            Self::Links => &[Kind::Link],
+            Self::Emails => &[Kind::Email],
+            Self::Colors => &[Kind::Color],
+            Self::Code => &[Kind::Code],
+        }
+    }
+
     fn label(self) -> &'static str {
-        match self.0 {
-            None => "All Types",
-            Some(Kind::Text) => "Text Only",
-            Some(Kind::Image) => "Images Only",
-            Some(Kind::Files) => "Files Only",
-            Some(Kind::Link) => "Links Only",
-            Some(Kind::Email) => "Emails Only",
-            Some(Kind::Color) => "Colors Only",
+        match self {
+            Self::All => "All Types",
+            Self::Text => "Text Only",
+            Self::Images => "Images Only",
+            Self::Files => "Files Only",
+            Self::Links => "Links Only",
+            Self::Emails => "Emails Only",
+            Self::Colors => "Colors Only",
+            Self::Code => "Code Only",
         }
     }
 
     fn row(self) -> impl IntoElement {
-        let icon = self.0.map_or(IconName::List, kind_icon);
+        let icon = self
+            .kinds()
+            .first()
+            .map_or(IconName::List, |&k| kind_icon(k));
         h_flex()
             .gap_2()
             .child(Icon::new(icon).small())
