@@ -1,0 +1,26 @@
+name: CI
+
+# dev: lint, then build the installer and portable zip as workflow artifacts.
+# Pull requests only get the lint job.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  build:
+    needs: lint
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/build.yml

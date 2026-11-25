@@ -124,17 +124,12 @@ design and its history are in [PLAN.md](PLAN.md).
 ## Releases
 
 Work happens on `dev`; pushing it lints, tests and builds the portable zip and
-the installer. Pushing `main` publishes the version in `Cargo.toml` as the tag
-`v<version>` with a changelog from the commit messages, reusing the files built
-on `dev` for the same source.
+the installer. Pull requests are only linted and tested.
+
+Pushing `main` does the same, then publishes the version in `Cargo.toml` as the
+release `v<version>` with a changelog from the commit messages. If that release
+exists, it is deleted and created again, so only a version bump adds a release.
 
 Commit messages follow `type(scope): description` (`feat`, `fix`, `perf`,
-`refactor`, `docs`, `test`, `build`, `ci`, `chore`; `!` marks a breaking
-change):
-
-- A **dot after the type**, such as `fix.(core): …`, lists the change in the
-  changelog without publishing for it. A push with only dotted commits publishes
-  nothing.
-- A new version creates a new release.
-- With an unchanged version, the release's tag moves to the new commit and its
-  files and notes are replaced.
+`refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style`; `!` marks a
+breaking change). Others are listed under "Other changes".

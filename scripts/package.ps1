@@ -43,13 +43,20 @@ https://github.com/bennett-sh/mocli
     Remove-Item -Recurse -Force $stage
 
     if (-not $SkipInstaller) {
-        $compiler = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
-        if (-not $compiler) {
-            $compiler = @(
+        function Find-Iscc {
+            $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($command) { return $command.Source }
+            @(
                 "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
                 "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
                 "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
             ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        }
+        $compiler = Find-Iscc
+        # Build machines may come without it.
+        if (-not $compiler -and $env:CI -and (Get-Command choco -ErrorAction SilentlyContinue)) {
+            choco install innosetup --yes --no-progress
+            $compiler = Find-Iscc
         }
         if (-not $compiler) {
             throw 'Inno Setup 6 was not found. Install it, or pass -SkipInstaller.'
