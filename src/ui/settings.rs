@@ -7,7 +7,7 @@ use async_channel::Sender;
 use gpui_kit::component::{
     ActiveTheme as _, Root, Sizable as _,
     button::{Button, ButtonVariants as _},
-    setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -68,28 +68,48 @@ fn switch(
     )
 }
 
-fn number(
+/// A dropdown over common limits. Typing a number would save every digit on
+/// the way, and a limit of "1" prunes the history at the next copy.
+fn limit(
     title: &'static str,
-    max: u32,
+    presets: &[u32],
+    unit: &'static str,
+    zero: &'static str,
     get: fn(&Config) -> u32,
     set: fn(&mut Config, u32),
+    current: u32,
 ) -> SettingItem {
-    let options = NumberFieldOptions {
-        min: 0.0,
-        max: f64::from(max),
-        step: 1.0,
+    let label = move |value: u32| match value {
+        0 => zero.to_owned(),
+        value => format!("{value} {unit}"),
     };
+    let options = limit_options(presets, current)
+        .into_iter()
+        .map(|value| (value.to_string().into(), label(value).into()))
+        .collect();
     SettingItem::new(
         title,
-        SettingField::number_input(
+        SettingField::dropdown(
             options,
-            move |cx| f64::from(read(cx, get)),
-            move |value, cx| {
-                let value = value.clamp(0.0, f64::from(max)).round() as u32;
-                save(cx, |config| set(config, value));
+            move |cx| read(cx, get).to_string().into(),
+            move |chosen: SharedString, cx| {
+                if let Ok(value) = chosen.parse() {
+                    save(cx, |config| set(config, value));
+                }
             },
         ),
     )
+}
+
+/// The presets, with a value set in the config file slotted in. Zero, meaning
+/// no limit, comes last.
+fn limit_options(presets: &[u32], current: u32) -> Vec<u32> {
+    let mut options = presets.to_vec();
+    if !options.contains(&current) {
+        options.push(current);
+    }
+    options.sort_by_key(|&value| (value == 0, value));
+    options
 }
 
 /// A dropdown over a few values, each with its label.
@@ -361,7 +381,7 @@ fn set_capture(config: &mut Config, kind: CaptureKind, on: bool) {
     }
 }
 
-fn history() -> SettingPage {
+fn history(config: &Config) -> SettingPage {
     SettingPage::new("History")
         .group(SettingGroup::new().title("Save").items(vec![
             switch(
@@ -393,23 +413,32 @@ fn history() -> SettingPage {
             .description("Contacts a copied link's website to show its title and picture. Addresses that look private or contain secrets are skipped."),
         ]))
         .group(SettingGroup::new().title("Limits").items(vec![
-            number(
-                "Entries to keep (0 for all)",
-                100_000,
+            limit(
+                "Entries to keep",
+                &[100, 500, 1000, 5000, 10_000, 0],
+                "entries",
+                "All",
                 |c| c.history.max_entries,
                 |c, v| c.history.max_entries = v,
+                config.history.max_entries,
             ),
-            number(
-                "Days to keep (0 for ever)",
-                3650,
+            limit(
+                "Keep entries for",
+                &[7, 30, 90, 180, 365, 0],
+                "days",
+                "Ever",
                 |c| c.history.max_age_days,
                 |c, v| c.history.max_age_days = v,
+                config.history.max_age_days,
             ),
-            number(
-                "Largest image in MB",
-                500,
+            limit(
+                "Largest image",
+                &[5, 10, 25, 50, 100],
+                "MB",
+                "No images",
                 |c| c.history.max_image_mb,
                 |c, v| c.history.max_image_mb = v,
+                config.history.max_image_mb,
             ),
         ]))
 }
@@ -562,7 +591,7 @@ fn pages(config: &Config) -> Vec<SettingPage> {
     vec![
         general(config),
         appearance(),
-        history(),
+        history(config),
         privacy(),
         shortcuts(),
         advanced(),
@@ -647,8 +676,15 @@ pub fn init(config: SharedConfig, store: SharedStore, events: Sender<Event>, cx:
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI exports a `test` attribute of its own.
-    use super::{list_of, pairs_of, show_pairs};
+    use super::{limit_options, list_of, pairs_of, show_pairs};
     use crate::config::Paste;
+
+    #[test]
+    fn limits_include_a_custom_value_in_order() {
+        assert_eq!(limit_options(&[10, 100, 0], 100), [10, 100, 0]);
+        assert_eq!(limit_options(&[10, 100, 0], 42), [10, 42, 100, 0]);
+        assert_eq!(limit_options(&[5, 10], 0), [5, 10, 0]);
+    }
 
     #[test]
     fn typed_lists_ignore_stray_separators() {
