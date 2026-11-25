@@ -262,6 +262,19 @@ fn three() -> Vec<NewEntry> {
 }
 
 #[gpui_kit::test]
+fn searching_the_type_dropdown_picks_a_type(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-dropdown", samples());
+    ui.popup
+        .update_in(ui.cx, |popup, window, cx| popup.focus_filter(window, cx));
+    ui.cx.run_until_parked();
+    ui.press("enter");
+    ui.type_text("link");
+    ui.press("enter");
+    // Only the link is listed, and the keys reach the search again.
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[3]));
+}
+
+#[gpui_kit::test]
 fn pin_and_delete_by_key(cx: &mut TestAppContext) {
     let mut ui = Harness::open(cx, "ui-pin", three());
     ui.press("down down ctrl-p");

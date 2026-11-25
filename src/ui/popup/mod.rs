@@ -18,6 +18,7 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     kbd::Kbd,
     list::{List, ListEvent, ListState},
+    searchable_list::SearchableVec,
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
@@ -76,7 +77,7 @@ impl Look {
 
 pub struct Popup {
     search: Entity<InputState>,
-    filter: Entity<SelectState<Vec<TypeFilter>>>,
+    filter: Entity<SelectState<SearchableVec<TypeFilter>>>,
     list: Entity<ListState<HistoryDelegate>>,
     selected: Option<Selected>,
     /// The actions panel, while open.
@@ -106,8 +107,9 @@ impl Popup {
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type to filter entries…"));
         let filter = cx.new(|cx| {
-            SelectState::new(FILTERS.to_vec(), Some(IndexPath::default()), window, cx)
-                .searchable(true)
+            // A plain `Vec` would ignore what is typed into the dropdown.
+            let filters = SearchableVec::new(FILTERS.to_vec());
+            SelectState::new(filters, Some(IndexPath::default()), window, cx).searchable(true)
         });
         let list = cx.new(|cx| ListState::new(HistoryDelegate::default(), window, cx));
 
@@ -124,7 +126,7 @@ impl Popup {
             cx.subscribe_in(
                 &filter,
                 window,
-                |this, _, _: &SelectEvent<Vec<TypeFilter>>, window, cx| {
+                |this, _, _: &SelectEvent<SearchableVec<TypeFilter>>, window, cx| {
                     this.refresh(false, window, cx);
                 },
             ),
@@ -179,6 +181,13 @@ impl Popup {
         });
         self.focus_search(window, cx);
         self.refresh(false, window, cx);
+    }
+
+    /// Opens the way for keys to reach the type dropdown, as a click does.
+    #[cfg(test)]
+    pub fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter
+            .update(cx, |filter, cx| filter.focus(window, cx));
     }
 
     fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
