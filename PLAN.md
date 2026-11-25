@@ -351,7 +351,33 @@ is only verified with a Win32 text box; the light theme is unchecked.
 - `scripts/e2e-placement.ps1` passed for the Win32 text box, WPF, centered and
   cursor cases. Its browser and activate-mode checks have not completed yet.
 
-## 14. Risks / open questions
+## 14. M4–M6 and release status (2026-11-25)
+
+Built as planned, with these differences:
+
+- **Previews:** code is highlighted with syntect; SVG is its own kind. No
+  checkerboard behind transparent images. Link previews are **off by default**
+  (§2 and §8 disagreed): fetching a copied link contacts its server and can use
+  up one-time links.
+- **Actions:** bulk deletion is confirmed inside the panel instead of a dialog.
+- **Settings:** `[keys]` needs a restart. The shortcut is a dropdown (any other
+  combination via the config file), not a recorder. No accent color, JSON
+  export/import or "keep open after action".
+- **Privacy:** sensitive content is `skip | store`; "ask" was dropped. Start with
+  Windows lives only in the registry, so the app and installer agree.
+- **Mica** and a signed build are not done (the latter needs a certificate).
+- **Packaging:** Inno Setup per-user installer and a portable zip
+  (`scripts/package.ps1`); a `portable` file next to the executable keeps data
+  there.
+- **CI:** `dev` builds and packages; `main` releases the files built for the same
+  source tree (see README, "Releases").
+
+Verification: unit and headless GPUI tests cover capture, storage, previews,
+keys, actions and settings. The end-to-end scripts have **not** run against M4–M6
+(the screen was locked), and the browser and activate-mode parts of
+`e2e-placement.ps1` have never completed.
+
+## 15. Risks / open questions
 
 - **Keyboard via LL hook** — must be fast (< ~1 ms, Windows drops slow hooks after `LowLevelHooksTimeout`); do minimal work in the hook, post to a channel. IME composition (CJK) won't work through the router → fallback to activate mode when the target uses an IME.
 - **UIPI** — can't hook/inject into elevated apps unless mocli runs elevated; detect via `OpenProcessToken`+`TokenElevation` and warn/fallback.
