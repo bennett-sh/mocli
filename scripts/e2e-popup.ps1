@@ -14,88 +14,8 @@ param(
     [string]$Exe = "$PSScriptRoot/../target/debug/mocli.exe",
     [string]$Shots = "$env:TEMP/mocli-shots"
 )
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class N {
-    [StructLayout(LayoutKind.Sequential)] struct LASTINPUT { public uint size, time; }
-    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUT i);
-    public static long IdleMs() {
-        var i = new LASTINPUT { size = 8 }; GetLastInputInfo(ref i);
-        return unchecked((uint)Environment.TickCount - i.time);
-    }
-    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
-    [StructLayout(LayoutKind.Sequential)] struct KI { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
-    [StructLayout(LayoutKind.Sequential)] struct MI { public int x, y; public uint data, flags, time; public IntPtr extra; }
-    [StructLayout(LayoutKind.Explicit)] struct U { [FieldOffset(0)] public KI k; [FieldOffset(0)] public MI m; }
-    [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public U u; }
-    [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] i, int size);
-    [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint type);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
-    [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
-    [DllImport("user32.dll")] public static extern short VkKeyScan(char c);
-    delegate bool EnumProc(IntPtr h, IntPtr l);
-    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
-    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-    public static IntPtr VisibleWindow(uint pid) {
-        IntPtr found = IntPtr.Zero;
-        EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); RECT r; GetWindowRect(h, out r);
-            if (p == pid && IsWindowVisible(h) && r.R - r.L > 300) { found = h; return false; } return true; }, IntPtr.Zero);
-        return found;
-    }
-    public static void Key(ushort vk, bool up) {
-        var i = new INPUT { type = 1 };
-        i.u.k = new KI { vk = vk, scan = (ushort)MapVirtualKey(vk, 0), flags = (up ? 2u : 0u) | (vk == 0xA5 || (vk >= 0x21 && vk <= 0x28) ? 1u : 0u) };
-        SendInput(1, new[] { i }, Marshal.SizeOf(typeof(INPUT)));
-    }
-    public static void Click() {
-        var d = new INPUT { type = 0 }; d.u.m = new MI { flags = 2 };
-        var u = new INPUT { type = 0 }; u.u.m = new MI { flags = 4 };
-        SendInput(2, new[] { d, u }, Marshal.SizeOf(typeof(INPUT)));
-    }
-}
-'@
-[void][N]::SetProcessDpiAwarenessContext([IntPtr](-4))
-$Forms = [System.Windows.Forms.Clipboard]
+. "$PSScriptRoot/e2e-lib.ps1"
 
-function Wait-Ui([int]$ms = 120) {
-    $end = [DateTime]::Now.AddMilliseconds($ms)
-    while ([DateTime]::Now -lt $end) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 5 }
-}
-function Assert-Safe {
-    if ([N]::GetForegroundWindow() -ne $form.Handle) { throw "ABORT: test window lost the foreground" }
-}
-# Send-Chord 0xA4,0x56 = hold Alt, press V, release in reverse order.
-function Send-Chord([int[]]$vks, [int]$wait = 120) {
-    Assert-Safe
-    foreach ($vk in $vks) { [N]::Key($vk, $false); Wait-Ui 15 }
-    [array]::Reverse($vks)
-    foreach ($vk in $vks) { [N]::Key($vk, $true); Wait-Ui 15 }
-    Wait-Ui $wait
-}
-function Send-Text([string]$text) {
-    foreach ($c in $text.ToCharArray()) {
-        $s = [N]::VkKeyScan($c); $vk = $s -band 0xFF
-        if (($s -shr 8) -band 1) { Send-Chord @(0xA0, $vk) 30 } else { Send-Chord @($vk) 30 }
-    }
-    Wait-Ui 150
-}
-function Click-At([int]$x, [int]$y) { [void][N]::SetCursorPos($x, $y); Wait-Ui 50; [N]::Click(); Wait-Ui 300 }
-function Get-Log { Get-Content "$env:MOCLI_DATA_DIR\logs\mocli.*.log" -ErrorAction SilentlyContinue }
-function Check([string]$name, [bool]$ok, $detail = '') {
-    if ($ok) { "PASS  $name" } else { $script:failed++; "FAIL  $name  $detail" }
-}
-function Popup { [N]::VisibleWindow($app.Id) }
-function Closed { (Popup) -eq [IntPtr]::Zero }
-function Open-Popup { Send-Chord @(0xA4, 0x56) 600 }
-function Bounds { $r = New-Object N+RECT; [void][N]::GetWindowRect((Popup), [ref]$r); $r }
 function Save-Shot([string]$name) {
     Wait-Ui 400
     $r = Bounds
@@ -106,14 +26,7 @@ function Save-Shot([string]$name) {
 # Clicks a point given in the popup's logical pixels (760 wide).
 function Click-Popup([double]$x, [double]$y, [int]$wait = 300) {
     $r = Bounds; $scale = ($r.R - $r.L) / 760.0
-    [void][N]::SetCursorPos([int]($r.L + $x * $scale), [int]($r.T + $y * $scale)); Wait-Ui 50; [N]::Click(); Wait-Ui $wait
-}
-# This process stays the clipboard owner, so it is recorded as the source.
-function Copy-Data($data) { $Forms::SetDataObject($data, $false, 20, 50); Wait-Ui 500 }
-function New-Data([string]$text) {
-    $data = [System.Windows.Forms.DataObject]::new()
-    if ($text) { $data.SetText($text) }
-    $data
+    Click-At ([int]($r.L + $x * $scale)) ([int]($r.T + $y * $scale)) $wait
 }
 function Get-Rows {
     $code = @'
@@ -133,30 +46,12 @@ function Use-Popup([scriptblock]$keys) {
     $box.Text
 }
 
-if (Get-Process mocli -ErrorAction SilentlyContinue) { 'SKIPPED quit the running mocli first'; exit 2 }
-$deadline = [DateTime]::Now.AddMinutes(4)
-while ([N]::IdleMs() -lt 15000) {
-    if ([DateTime]::Now -gt $deadline) { 'SKIPPED the user never went idle; nothing was touched'; exit 2 }
-    Start-Sleep -Milliseconds 500
-}
-
-$backup = [System.Windows.Forms.DataObject]::new()
-$hasBackup = $false
-if ($Forms::ContainsText()) { $backup.SetText($Forms::GetText()); $hasBackup = $true }
-if ($Forms::ContainsImage()) { $backup.SetImage($Forms::GetImage()); $hasBackup = $true }
-if ($Forms::ContainsFileDropList()) { $backup.SetFileDropList($Forms::GetFileDropList()); $hasBackup = $true }
-
-$root = Join-Path ([System.IO.Path]::GetTempPath()) "mocli-popup-$PID"
-New-Item -ItemType Directory -Force "$root/appdata", "$root/files", $Shots | Out-Null
-$env:APPDATA = "$root/appdata"
-$env:MOCLI_DATA_DIR = "$root/data"
-$env:MOCLI_LOG = 'warn,mocli=debug'
-$script:failed = 0
-$app = $null; $form = $null; $other = $null; $stripes = $null
+Start-Test
+New-Item -ItemType Directory -Force $Shots | Out-Null
+$form = $null; $other = $null; $stripes = $null
 try {
-    $app = Start-Process $Exe -PassThru -WindowStyle Hidden -RedirectStandardError "$root/stderr.txt"
-    Wait-Ui 2500
-    Check 'app is running and ready' ((-not $app.HasExited) -and (Get-Log | Select-String 'ready'))
+    Start-Mocli
+    Check 'app is running and ready' ([bool](Get-Log | Select-String 'ready'))
     $second = Start-Process $Exe -PassThru -WindowStyle Hidden -RedirectStandardError "$root/stderr2.txt"
     Check 'second instance exits' ($second.WaitForExit(5000))
 
@@ -197,14 +92,15 @@ try {
     $form.Text = 'mocli e2e target'; $form.StartPosition = 'Manual'; $form.TopMost = $true
     $form.Location = '20,20'; $form.Size = '420,140'
     $box = New-Object System.Windows.Forms.TextBox; $box.Dock = 'Top'; $form.Controls.Add($box)
-    $form.Show(); Wait-Ui 300
+    $form.Show(); Show-Front $form.Handle
+    $script:target = $form.Handle
     $p = $box.PointToScreen([System.Drawing.Point]::new(100, 8)); Click-At $p.X $p.Y
     Assert-Safe
     Send-Text 'abc'
     Check 'baseline typing reaches the text box' ($box.Text -ceq 'abc') $box.Text
 
     Open-Popup
-    Check 'Alt+V shows the popup' (-not (Closed))
+    Check 'Win+V shows the popup' (-not (Closed))
     Check 'target keeps foreground and focus' (([N]::GetForegroundWindow() -eq $form.Handle) -and $box.Focused)
     $ex = [N]::GetWindowLong((Popup), -20)
     Check 'popup has NOACTIVATE and TOPMOST' ((($ex -band 0x08000000) -ne 0) -and (($ex -band 8) -ne 0))
@@ -282,11 +178,11 @@ try {
     $box.Clear(); Open-Popup; Open-Popup
     Check 'hotkey toggles closed' (Closed)
     Send-Text 'e'
-    Check 'no stray menu focus after Alt+V' ($box.Text -ceq 'e') $box.Text
+    Check 'no Start menu after Win+V' ($box.Text -ceq 'e') $box.Text
 
     # Type immediately, before the popup has had time to appear.
     $box.Clear(); Wait-Ui 100
-    Send-Chord @(0xA4, 0x56) 0; Send-Text 'delta'; Send-Chord @(0x0D) 600
+    Open-Popup 0; Send-Text 'delta'; Send-Chord @(0x0D) 600
     Check 'type-ahead is not lost' ($box.Text -ceq 'delta dates') $box.Text
 
     $box.Clear(); Open-Popup
@@ -297,22 +193,14 @@ try {
 
     Open-Popup
     $other = New-Object System.Windows.Forms.Form; $other.TopMost = $true; $other.StartPosition = 'Manual'; $other.Location = '20,200'
-    $other.Show(); $other.Activate(); Wait-Ui 600
+    $other.Show(); Show-Front $other.Handle; Wait-Ui 300
     Check 'foreground change closes' (Closed)
     $problems = @(Get-Log | Select-String ' WARN | ERROR ')
     Check 'nothing went wrong in the log' ($problems.Count -eq 0) "$($problems.Count) lines"
 }
-catch { $script:failed++; "ERROR $_ $($_.ScriptStackTrace)" }
+catch { $script:failed++; Write-Host "ERROR $_ $($_.ScriptStackTrace)" }
 finally {
-    foreach ($vk in 0xA0, 0xA2, 0xA4, 0xA5) { [N]::Key($vk, $true) }
     foreach ($window in $other, $form, $stripes) { if ($window) { $window.Dispose() } }
-    if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id; $app.WaitForExit() }
-    if ($hasBackup) { $Forms::SetDataObject($backup, $true, 20, 50) } else { $Forms::Clear() }
+    Write-Host "---- screenshots in $Shots"
+    Complete-Test
 }
-"---- $script:failed failed"
-'---- warnings and errors in log'
-Get-Log | Select-String ' WARN | ERROR '
-Get-Content "$root/stderr.txt" -ErrorAction SilentlyContinue | Select-String 'panic'
-Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-"---- screenshots in $Shots"
-exit [int]($script:failed -gt 0)

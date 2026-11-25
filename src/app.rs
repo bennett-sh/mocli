@@ -6,11 +6,11 @@ use gpui_kit::component::{Root, Theme};
 use gpui_kit::*;
 
 use crate::{
-    config::{Backdrop, Config},
+    config::{Backdrop, Config, FocusMode, Placement},
     ingest, paths,
     platform::{
-        Activation, Event, clipboard, clipboard_write, hook, input, shell, tray,
-        window::PopupWindow,
+        Activation, Event, caret, clipboard, clipboard_write, cursor, foreground, hook, input,
+        shell, tray, window::PopupWindow,
     },
     reuse,
     store::{SharedStore, Store},
@@ -37,12 +37,14 @@ pub fn run(config: Config) -> Result<()> {
         let _ = changes.try_send(Event::HistoryChanged);
     })?;
     clipboard::spawn(config.privacy, snapshots)?;
-    hook::spawn(config.general.hotkey, events.clone())?;
-
     let settings = Settings {
         backdrop: config.appearance.backdrop,
+        placement: config.general.placement,
+        takes_focus: config.general.focus_mode == FocusMode::Activate,
         move_to_top_on_reuse: config.general.move_to_top_on_reuse,
     };
+    hook::spawn(config.general.hotkey, !settings.takes_focus, events.clone())?;
+    let locator = caret::Locator::spawn()?;
 
     gpui_kit::application()
         .with_assets(Assets)
@@ -53,7 +55,7 @@ pub fn run(config: Config) -> Result<()> {
             Theme::sync_system_appearance(None, cx);
             popup::bind_keys(cx);
 
-            if let Err(error) = start(settings, store, events, incoming, cx) {
+            if let Err(error) = start(settings, store, locator, events, incoming, cx) {
                 tracing::error!(error = format!("{error:#}"), "startup failed");
                 cx.quit();
             }
@@ -64,6 +66,8 @@ pub fn run(config: Config) -> Result<()> {
 #[derive(Clone, Copy)]
 struct Settings {
     backdrop: Backdrop,
+    placement: Placement,
+    takes_focus: bool,
     move_to_top_on_reuse: bool,
 }
 
@@ -75,36 +79,45 @@ struct Controller {
     view: Entity<Popup>,
     popup: PopupWindow,
     store: SharedStore,
+    locator: caret::Locator,
     settings: Settings,
     visible: bool,
 }
 
 impl Controller {
     fn show(&mut self, cx: &mut AsyncApp) -> Result<()> {
-        hook::set_capture(true);
+        // First, so keys typed while the popup appears are not lost.
+        hook::open();
+        // Asked before the popup shows and perhaps takes focus.
+        let anchor = match self.settings.placement {
+            Placement::Caret => self.locator.locate(hook::target()),
+            Placement::Cursor => cursor(),
+            Placement::Centered => None,
+        };
         let view = &self.view;
         self.window.update(cx, |_, window, cx| {
             view.update(cx, |view, cx| view.reset(window, cx));
         })?;
-        let rect = self.popup.show_centered(POPUP_WIDTH, POPUP_HEIGHT)?;
+        let rect = self.popup.show(anchor, POPUP_WIDTH, POPUP_HEIGHT)?;
         hook::set_popup_rect(Some(rect));
         self.visible = true;
         tracing::info!("popup shown");
         Ok(())
     }
 
-    fn hide(&mut self) -> Result<()> {
-        hook::set_capture(false);
+    /// With `restore`, a popup that holds focus gives it back to the app.
+    fn hide(&mut self, restore: bool) -> Result<()> {
+        hook::close();
         hook::set_popup_rect(None);
         if std::mem::take(&mut self.visible) {
             tracing::info!("popup hidden");
-            self.popup.hide()?;
+            self.popup.hide(restore.then(hook::target))?;
         }
         Ok(())
     }
 
     /// Puts an entry on the clipboard and, unless only copying, pastes it into
-    /// the app that kept focus.
+    /// the app the popup was opened from.
     async fn activate(&mut self, id: i64, how: Activation, cx: &mut AsyncApp) -> Result<()> {
         let payload = self
             .store
@@ -112,7 +125,8 @@ impl Controller {
             .payload(id)?
             .context("the entry no longer exists")?;
         let content = reuse::content(payload, how)?;
-        self.hide()?;
+        let target = hook::target();
+        self.hide(true)?;
         clipboard_write::write(self.popup.handle(), &content)?;
         self.store.lock().mark_used(
             id,
@@ -123,6 +137,11 @@ impl Controller {
 
         if how != Activation::Copy {
             cx.background_executor().timer(PASTE_DELAY).await;
+            // Never paste into a window the user did not open the popup from.
+            anyhow::ensure!(
+                foreground() == target,
+                "focus moved elsewhere, so the entry was only copied"
+            );
             input::paste()?;
         }
         Ok(())
@@ -142,18 +161,22 @@ impl Controller {
 fn start(
     settings: Settings,
     store: SharedStore,
+    locator: caret::Locator,
     events: Sender<Event>,
     incoming: Receiver<Event>,
     cx: &mut App,
 ) -> Result<()> {
     let tray = tray::create(events.clone()).context("failed to create the tray icon")?;
     let (window, view) = open_popup(settings.backdrop, store.clone(), events, cx)?;
-    let popup = window.update(cx, |_, window, _| PopupWindow::of(window))??;
+    let popup = window.update(cx, |_, window, _| {
+        PopupWindow::of(window, settings.takes_focus)
+    })??;
     let mut controller = Controller {
         window,
         view,
         popup,
         store,
+        locator,
         settings,
         visible: false,
     };
@@ -171,7 +194,8 @@ fn start(
         while let Ok(event) = incoming.recv().await {
             let result = match event {
                 Event::Show => controller.show(cx),
-                Event::Hide => controller.hide(),
+                Event::Hide => controller.hide(true),
+                Event::Dismiss => controller.hide(false),
                 Event::Key(keystroke) if controller.visible => {
                     controller.window.update(cx, |_, window, cx| {
                         window.dispatch_keystroke(keystroke, cx);
@@ -198,7 +222,7 @@ fn start(
                 tracing::error!(error = format!("{error:#}"), "event failed");
                 // Never keep the keyboard captured for a broken popup.
                 if !controller.visible {
-                    hook::set_capture(false);
+                    hook::close();
                 }
             }
         }

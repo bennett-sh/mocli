@@ -7,8 +7,15 @@ use crate::platform::hotkey::Hotkey;
 const DEFAULT_FILE: &str = r#"# mocli configuration. Changes apply after a restart.
 
 [general]
-# Opens and closes the popup, for example "Alt+V", "Win+V" or "Ctrl+Shift+V".
-hotkey = "Alt+V"
+# Opens and closes the popup, for example "Win+V", "Alt+V" or "Ctrl+Shift+V".
+# "Win+V" replaces the clipboard history built into Windows.
+hotkey = "Win+V"
+# Where the popup opens: "caret" (next to the text you are typing, centered if
+# there is none), "centered" or "cursor" (at the mouse pointer).
+placement = "caret"
+# "no_activate" leaves focus in your app. Use "activate" if typing in the popup
+# does not work, for example with an input method for Chinese or Japanese.
+focus_mode = "no_activate"
 # Pasting or copying an entry moves it to the top of the list.
 move_to_top_on_reuse = true
 
@@ -104,13 +111,34 @@ impl Privacy {
 #[serde(default)]
 pub struct General {
     pub hotkey: Hotkey,
+    pub placement: Placement,
+    pub focus_mode: FocusMode,
     pub move_to_top_on_reuse: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    Caret,
+    Centered,
+    Cursor,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusMode {
+    #[default]
+    NoActivate,
+    Activate,
 }
 
 impl Default for General {
     fn default() -> Self {
         Self {
             hotkey: Hotkey::default(),
+            placement: Placement::default(),
+            focus_mode: FocusMode::default(),
             move_to_top_on_reuse: true,
         }
     }

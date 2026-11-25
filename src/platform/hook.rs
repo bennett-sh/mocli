@@ -1,8 +1,9 @@
 //! Low-level keyboard and mouse hooks on a dedicated thread.
 //!
-//! The popup never takes focus, so while it is open the keyboard hook diverts
-//! keys to it. Hook callbacks must return quickly or Windows drops them. Key
-//! contents are never logged here.
+//! The hooks watch for the shortcut and for anything that should close the
+//! popup. Unless the popup takes focus itself, the keyboard hook also diverts
+//! keys to it while it is open. Hook callbacks must return quickly or Windows
+//! drops them. Key contents are never logged here.
 
 use std::{
     cell::RefCell,
@@ -39,8 +40,10 @@ use super::{
     keyboard::{self, KeyFilter, Verdict},
 };
 
-static CAPTURING: AtomicBool = AtomicBool::new(false);
-/// The window that had focus when capture began.
+static OPEN: AtomicBool = AtomicBool::new(false);
+/// Whether an open popup receives keys through the hook.
+static DIVERTS_KEYS: AtomicBool = AtomicBool::new(true);
+/// The window that had focus when the popup opened.
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static POPUP_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 
@@ -53,16 +56,26 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
-/// Starts or stops diverting the keyboard to the popup.
-pub fn set_capture(capture: bool) {
-    if capture && !CAPTURING.load(Ordering::SeqCst) {
+/// Marks the popup as open, remembering the focused window.
+pub fn open() {
+    if !OPEN.load(Ordering::SeqCst) {
         // SAFETY: plain query.
         TARGET.store(
             unsafe { GetForegroundWindow() }.0 as isize,
             Ordering::SeqCst,
         );
     }
-    CAPTURING.store(capture, Ordering::SeqCst);
+    OPEN.store(true, Ordering::SeqCst);
+}
+
+/// Marks the popup as closed, which releases the keyboard.
+pub fn close() {
+    OPEN.store(false, Ordering::SeqCst);
+}
+
+/// The window that had focus when the popup last opened.
+pub fn target() -> HWND {
+    HWND(TARGET.load(Ordering::SeqCst) as *mut _)
 }
 
 /// Screen area of the popup; clicks outside it close the popup.
@@ -73,7 +86,8 @@ pub fn set_popup_rect(rect: Option<RECT>) {
 }
 
 /// Installs the hooks and returns once they are active.
-pub fn spawn(hotkey: Hotkey, events: Sender<Event>) -> Result<()> {
+pub fn spawn(hotkey: Hotkey, divert_keys: bool, events: Sender<Event>) -> Result<()> {
+    DIVERTS_KEYS.store(divert_keys, Ordering::SeqCst);
     let (ready_tx, ready_rx) = mpsc::channel();
 
     thread::Builder::new()
@@ -138,8 +152,8 @@ fn send(event: Event) {
 }
 
 fn dismiss() {
-    if CAPTURING.swap(false, Ordering::SeqCst) {
-        send(Event::Hide);
+    if OPEN.swap(false, Ordering::SeqCst) {
+        send(Event::Dismiss);
     }
 }
 
@@ -187,7 +201,8 @@ fn handle_key(message: u32, key: KBDLLHOOKSTRUCT) -> bool {
     }
 
     let mods = held_modifiers();
-    let capturing = CAPTURING.load(Ordering::SeqCst);
+    let open = OPEN.load(Ordering::SeqCst);
+    let capturing = open && DIVERTS_KEYS.load(Ordering::SeqCst);
     let verdict = STATE.with_borrow_mut(|state| {
         state.as_mut().map_or(Verdict::Pass, |state| {
             if down {
@@ -204,8 +219,13 @@ fn handle_key(message: u32, key: KBDLLHOOKSTRUCT) -> bool {
         Verdict::Toggle => {
             // Flipping the flag here means the hotkey frees the keyboard even
             // if the UI thread is stuck.
-            set_capture(!capturing);
-            send(if capturing { Event::Hide } else { Event::Show });
+            if open {
+                close();
+                send(Event::Hide);
+            } else {
+                self::open();
+                send(Event::Show);
+            }
         }
         Verdict::Forward => {
             if let Some(keystroke) = keyboard::keystroke(vk, key.scanCode, mods, caps_lock_on()) {
@@ -225,7 +245,7 @@ unsafe extern "system" fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         wparam.0 as u32,
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
     );
-    if code == HC_ACTION as i32 && pressed && CAPTURING.load(Ordering::SeqCst) {
+    if code == HC_ACTION as i32 && pressed && OPEN.load(Ordering::SeqCst) {
         // SAFETY: for `HC_ACTION`, `lparam` points to this struct.
         let point = unsafe { (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt };
         let inside = POPUP_RECT
@@ -252,7 +272,10 @@ unsafe extern "system" fn on_foreground(
     _: u32,
     _: u32,
 ) {
-    if window.0 as isize != TARGET.load(Ordering::SeqCst) {
+    // A popup that takes focus closes on losing it to anyone. Otherwise the
+    // target announcing itself again changes nothing.
+    let target = window.0 as isize == TARGET.load(Ordering::SeqCst);
+    if !target || !DIVERTS_KEYS.load(Ordering::SeqCst) {
         dismiss();
     }
 }

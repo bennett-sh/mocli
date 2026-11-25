@@ -337,7 +337,21 @@ The popup shows the real history and pastes from it, checked by
 Known gaps: opening from the tray leaves no focused input to paste into; pasting
 is only verified with a Win32 text box; the light theme is unchecked.
 
-## 13. Risks / open questions
+## 13. M3 status (2026-11-25)
+
+- Placement `caret` (default) tries the Win32 caret, UI Automation text ranges,
+  the MSAA caret, then a small focused input, and otherwise centers. `centered`
+  and `cursor` are the other settings; "last position" was dropped because the
+  popup cannot be dragged.
+- `Win+V` is the default shortcut and replaces the Windows clipboard history.
+- `focus_mode = "activate"` is the fallback for input methods: the popup takes
+  focus and hands it back before pasting. It is a manual setting; elevated apps
+  are still unsupported.
+- Pasting is skipped, leaving the entry on the clipboard, if focus moved.
+- `scripts/e2e-placement.ps1` passed for the Win32 text box, WPF, centered and
+  cursor cases. Its browser and activate-mode checks have not completed yet.
+
+## 14. Risks / open questions
 
 - **Keyboard via LL hook** — must be fast (< ~1 ms, Windows drops slow hooks after `LowLevelHooksTimeout`); do minimal work in the hook, post to a channel. IME composition (CJK) won't work through the router → fallback to activate mode when the target uses an IME.
 - **UIPI** — can't hook/inject into elevated apps unless mocli runs elevated; detect via `OpenProcessToken`+`TokenElevation` and warn/fallback.

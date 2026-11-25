@@ -215,7 +215,7 @@ mod tests {
     const ALT: Mods = Mods { alt: true, ..NONE };
 
     fn filter() -> KeyFilter {
-        KeyFilter::new(Hotkey::default())
+        KeyFilter::new("Alt+V".parse().unwrap())
     }
 
     #[test]
@@ -225,6 +225,18 @@ mod tests {
         assert_eq!(filter.key_down(V, ALT, true), Verdict::Swallow);
         assert_eq!(filter.key_up(V), Verdict::Swallow);
         assert_eq!(filter.key_down(V, ALT, true), Verdict::Toggle);
+    }
+
+    #[test]
+    fn win_shortcut_is_taken_from_windows() {
+        let mut filter = KeyFilter::new(Hotkey::default());
+        let win = Mods { win: true, ..NONE };
+        assert_eq!(filter.key_down(0x5B, win, false), Verdict::Pass);
+        assert_eq!(filter.key_down(V, win, false), Verdict::Toggle);
+        assert_eq!(filter.key_up(V), Verdict::Swallow);
+        assert_eq!(filter.key_up(0x5B), Verdict::Pass);
+        // Other Win shortcuts are left to Windows.
+        assert_eq!(filter.key_down(A, win, false), Verdict::Pass);
     }
 
     #[test]

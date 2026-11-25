@@ -27,6 +27,7 @@ public static class Idle {
 $Forms = [System.Windows.Forms.Clipboard]
 
 if (Get-Process mocli -ErrorAction SilentlyContinue) { 'SKIPPED quit the running mocli first'; exit 2 }
+if (Get-Process LogonUI -ErrorAction SilentlyContinue) { 'SKIPPED the screen is locked'; exit 2 }
 $deadline = [DateTime]::Now.AddMinutes(3)
 while ([Idle]::Milliseconds() -lt 10000) {
     if ([DateTime]::Now -gt $deadline) { 'SKIPPED the user never went idle; the clipboard was not touched'; exit 2 }

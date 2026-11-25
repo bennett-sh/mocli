@@ -21,7 +21,7 @@ impl Default for Hotkey {
     fn default() -> Self {
         Self {
             mods: Mods {
-                alt: true,
+                win: true,
                 ..Mods::default()
             },
             vk: u16::from(b'V'),
@@ -92,9 +92,9 @@ mod tests {
 
     #[test]
     fn parses_common_shortcuts() {
-        assert_eq!("Alt+V".parse(), Ok(Hotkey::default()));
-        let win_v: Hotkey = " win + v ".parse().unwrap();
-        assert!(win_v.mods.win && !win_v.mods.alt);
+        assert_eq!(" win + v ".parse(), Ok(Hotkey::default()));
+        let alt_v: Hotkey = "Alt+V".parse().unwrap();
+        assert!(alt_v.mods.alt && !alt_v.mods.win);
         assert_eq!("F12".parse::<Hotkey>().unwrap().vk, 0x7B);
     }
 
