@@ -20,10 +20,11 @@ use windows::Win32::{
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
             GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-            HWND_TOPMOST, MA_NOACTIVATE, PostMessageW, SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow,
-            SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_MOUSEACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            HWND_TOPMOST, IsIconic, MA_NOACTIVATE, PostMessageW, SW_HIDE, SW_RESTORE,
+            SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_MOUSEACTIVATE, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -204,6 +205,32 @@ impl PopupWindow {
         }
         Ok(())
     }
+}
+
+/// Shows an ordinary window, restored and in front.
+///
+/// Showing it explicitly matters: if mocli was launched with a "hidden" start
+/// command, Windows applies that to the first window the app shows.
+pub fn bring_forward(
+    window: &gpui_kit::AnyWindowHandle,
+    cx: &mut gpui_kit::AsyncApp,
+) -> Result<()> {
+    let handle = window.update(cx, |_, window, _| PopupWindow::of(window, true))??;
+    // SAFETY: the window was just alive, and a stale handle is rejected.
+    unsafe {
+        let command = if IsIconic(handle.window).as_bool() {
+            SW_RESTORE
+        } else {
+            SW_SHOWNORMAL
+        };
+        // The return value is the previous visibility, not an error.
+        let _ = ShowWindow(handle.window, command);
+        input::tap_dummy_key();
+        if !SetForegroundWindow(handle.window).as_bool() {
+            tracing::debug!("Windows did not bring the window forward");
+        }
+    }
+    Ok(())
 }
 
 unsafe extern "system" fn refuse_activation(

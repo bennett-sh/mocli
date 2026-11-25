@@ -16,9 +16,9 @@ param(
 )
 . "$PSScriptRoot/e2e-lib.ps1"
 
-function Save-Shot([string]$name) {
+function Save-Shot([string]$name, [IntPtr]$window = (Popup)) {
     Wait-Ui 400
-    $r = Bounds
+    $r = New-Object N+RECT; [void][N]::GetWindowRect($window, [ref]$r)
     $bmp = New-Object System.Drawing.Bitmap (($r.R - $r.L), ($r.B - $r.T))
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size); $bmp.Save("$Shots/$name.png"); $g.Dispose(); $bmp.Dispose()
@@ -162,6 +162,22 @@ try {
     $got = Use-Popup { Click-Popup 660 30 500; Send-Chord @(0x1B) 500; Send-Text 'delta'; Send-Chord @(0x0D) }
     Check 'closing the dropdown returns to the search' ($got -ceq 'delta dates') $got
 
+    $got = Use-Popup { Send-Chord @(0xA2, 0x4B) 600; Save-Shot 'actions'; Send-Chord @(0x1B) 400; Send-Text 'delta'; Send-Chord @(0x0D) }
+    Check 'Escape closes the actions panel, not the popup' ($got -ceq 'delta dates') $got
+
+    # Ctrl+, opens the settings window, which takes focus like any window.
+    Open-Popup; Send-Chord @(0xA2, 0xBC) 2500
+    $window = [N]::GetForegroundWindow()
+    Check 'Ctrl+, opens the settings window' ([N]::Title($window) -ceq 'mocli Settings') ([N]::Title($window))
+    if ([N]::Title($window) -ceq 'mocli Settings') {
+        $script:target = $window
+        Save-Shot 'settings' $window
+        Send-Chord @(0xA4, 0x73) 800
+        $script:target = $form.Handle
+    }
+    Show-Front $form.Handle; Click-At $p.X $p.Y
+    Check 'closing the settings keeps mocli running' (-not $app.HasExited)
+
     # The second row: below the header, the section title and one 40px row.
     $box.Clear(); Open-Popup
     Click-Popup 150 150 700
@@ -196,7 +212,9 @@ try {
     $other = New-Object System.Windows.Forms.Form; $other.TopMost = $true; $other.StartPosition = 'Manual'; $other.Location = '20,200'
     $other.Show(); Show-Front $other.Handle; Wait-Ui 300
     Check 'foreground change closes' (Closed)
-    $problems = @(Get-Log | Select-String ' WARN | ERROR ')
+    # GPUI asks a closed window for its bounds once more and logs that it is gone.
+    $problems = @(Get-Log | Select-String ' WARN | ERROR ' |
+        Where-Object { $_ -notmatch 'Invalid window handle' })
     Check 'nothing went wrong in the log' ($problems.Count -eq 0) "$($problems.Count) lines"
 }
 catch { $script:failed++; Write-Host "ERROR $_ $($_.ScriptStackTrace)" }

@@ -18,7 +18,7 @@ use crate::{
         SharedConfig, ThemeChoice,
     },
     paths,
-    platform::{Event, autostart, hotkey::Hotkey},
+    platform::{Event, autostart, hotkey::Hotkey, window},
     store::SharedStore,
 };
 
@@ -627,10 +627,9 @@ impl SettingsWindow {
     }
 
     pub fn open(&mut self, cx: &mut AsyncApp) -> Result<()> {
+        // Fails if the window was closed, and a new one is opened.
         if let Some(window) = self.0
-            && window
-                .update(cx, |_, window, _| window.activate_window())
-                .is_ok()
+            && window::bring_forward(&window, cx).is_ok()
         {
             return Ok(());
         }
@@ -647,13 +646,13 @@ impl SettingsWindow {
                 ..Default::default()
             };
             cx.open_window(options, |window, cx| {
-                window.activate_window();
                 let view = cx.new(|_| SettingsView);
                 cx.new(|cx| Root::new(view, window, cx))
             })
         })?;
-        self.0 = Some(window.into());
-        Ok(())
+        let window = AnyWindowHandle::from(window);
+        self.0 = Some(window);
+        window::bring_forward(&window, cx)
     }
 
     /// Redraws after the config changed elsewhere.
