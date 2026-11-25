@@ -2,6 +2,17 @@
 name = "mocli"
 version = "0.1.0"
 edition = "2024"
+description = "A clipboard history for Windows"
+repository = "https://github.com/bennett-sh/mocli"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+
+[build-dependencies]
+winresource = "0.1"
 
 [dependencies]
 anyhow = "1"
