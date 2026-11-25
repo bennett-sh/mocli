@@ -5,6 +5,8 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context as _, Result};
 
 use crate::{
+    capture::Snapshot,
+    ingest,
     platform::{Activation, clipboard_write::Content},
     store::{Format, Kind, Payload},
 };
@@ -36,6 +38,25 @@ pub fn content(payload: Payload, how: Activation) -> Result<Content> {
         rtf: take(Format::Rtf),
         text,
     })
+}
+
+/// What was on the clipboard before, as far as mocli can put it back: files,
+/// text with its formatting, or a picture.
+pub fn restored(snapshot: Snapshot) -> Option<Content> {
+    if !snapshot.files.is_empty() {
+        return Some(Content::Files(snapshot.files));
+    }
+    if let Some(text) = snapshot.text {
+        return Some(Content::Text {
+            text,
+            html: snapshot.html,
+            rtf: snapshot.rtf,
+        });
+    }
+    let png = ingest::to_png(&snapshot.image?)
+        .inspect_err(|error| tracing::warn!(%error, "could not keep the previous picture"))
+        .ok()?;
+    Some(Content::Image { png })
 }
 
 #[cfg(test)]

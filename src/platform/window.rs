@@ -17,7 +17,7 @@ use windows::Win32::{
     },
     UI::{
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
-        Shell::{DefSubclassProc, SetWindowSubclass},
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
             GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
             HWND_TOPMOST, MA_NOACTIVATE, PostMessageW, SW_HIDE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
@@ -57,15 +57,24 @@ impl PopupWindow {
         self.window
     }
 
+    /// Switches between taking focus and leaving it in the app. The popup must
+    /// be hidden.
+    pub fn set_takes_focus(&mut self, takes_focus: bool) -> Result<()> {
+        self.takes_focus = takes_focus;
+        self.prepare()
+    }
+
     pub fn prepare(self) -> Result<()> {
         // SAFETY: the popup is a live window owned by the calling thread.
         unsafe {
-            let style = GetWindowLongPtrW(self.window, GWL_EXSTYLE);
-            let mut extra = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-            if !self.takes_focus {
-                extra |= WS_EX_NOACTIVATE;
+            let mut style = GetWindowLongPtrW(self.window, GWL_EXSTYLE)
+                | (WS_EX_TOOLWINDOW | WS_EX_TOPMOST).0 as isize;
+            if self.takes_focus {
+                style &= !(WS_EX_NOACTIVATE.0 as isize);
+            } else {
+                style |= WS_EX_NOACTIVATE.0 as isize;
             }
-            SetWindowLongPtrW(self.window, GWL_EXSTYLE, style | extra.0 as isize);
+            SetWindowLongPtrW(self.window, GWL_EXSTYLE, style);
             // GPUI creates an overlapped window, whose invisible resize frame
             // would leave a gap around the content.
             SetWindowLongPtrW(self.window, GWL_STYLE, WS_POPUP.0 as isize);
@@ -80,7 +89,10 @@ impl PopupWindow {
             )?;
 
             // GPUI answers `MA_ACTIVATE` to mouse clicks, overriding the style.
-            if !self.takes_focus {
+            if self.takes_focus {
+                // Fails if it was never added, which is fine.
+                let _ = RemoveWindowSubclass(self.window, Some(refuse_activation), 1);
+            } else {
                 SetWindowSubclass(self.window, Some(refuse_activation), 1, 0)
                     .ok()
                     .context("failed to subclass the popup")?;

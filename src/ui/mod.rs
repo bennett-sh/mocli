@@ -3,6 +3,7 @@ mod file_facts;
 mod history_list;
 pub mod popup;
 mod preview;
+pub mod settings;
 #[cfg(test)]
 mod tests;
 mod type_filter;

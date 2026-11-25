@@ -7,13 +7,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY,
 };
 
-use super::keyboard::VK_DUMMY;
+use super::{
+    hotkey::{PasteKeys, VK_INSERT},
+    keyboard::VK_DUMMY,
+};
 
 /// Marks input we inject ourselves so the keyboard hook lets it through.
 pub const OWN_INPUT: usize = 0x6D6F_636C; // "mocl"
 
+const VK_LSHIFT: u16 = 0xA0;
 const VK_LCONTROL: u16 = 0xA2;
-const VK_V: u16 = b'V' as u16;
+const VK_LALT: u16 = 0xA4;
+const VK_LWIN: u16 = 0x5B;
 /// Left and right Shift, Ctrl, Alt and Win.
 const MODIFIERS: [u16; 8] = [0xA0, 0xA1, VK_LCONTROL, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C];
 
@@ -28,8 +33,8 @@ fn key(vk: u16, stroke: Stroke) -> INPUT {
         Stroke::Down => KEYBD_EVENT_FLAGS(0),
         Stroke::Up => KEYEVENTF_KEYUP,
     };
-    // Right Ctrl, right Alt and the Win keys.
-    if matches!(vk, 0xA3 | 0xA5 | 0x5B | 0x5C) {
+    // Right Ctrl, right Alt, the Win keys and Insert.
+    if matches!(vk, 0xA3 | 0xA5 | 0x5B | 0x5C | VK_INSERT) {
         flags |= KEYEVENTF_EXTENDEDKEY;
     }
     INPUT {
@@ -66,8 +71,8 @@ pub fn tap_dummy_key() {
     }
 }
 
-/// Presses Ctrl+V in the focused app.
-pub fn paste() -> Result<()> {
+/// Presses the paste keys, normally Ctrl+V, in the focused app.
+pub fn paste(PasteKeys(keys): PasteKeys) -> Result<()> {
     // Keys still held from the shortcut would turn this into something else.
     let held: Vec<u16> = MODIFIERS
         .into_iter()
@@ -83,11 +88,17 @@ pub fn paste() -> Result<()> {
         inputs.extend([key(VK_DUMMY, Stroke::Down), key(VK_DUMMY, Stroke::Up)]);
     }
     inputs.extend(held.into_iter().map(|vk| key(vk, Stroke::Up)));
-    inputs.extend([
-        key(VK_LCONTROL, Stroke::Down),
-        key(VK_V, Stroke::Down),
-        key(VK_V, Stroke::Up),
-        key(VK_LCONTROL, Stroke::Up),
-    ]);
+    let modifiers: Vec<u16> = [
+        (keys.mods.win, VK_LWIN),
+        (keys.mods.ctrl, VK_LCONTROL),
+        (keys.mods.alt, VK_LALT),
+        (keys.mods.shift, VK_LSHIFT),
+    ]
+    .into_iter()
+    .filter_map(|(held, vk)| held.then_some(vk))
+    .collect();
+    inputs.extend(modifiers.iter().map(|&vk| key(vk, Stroke::Down)));
+    inputs.extend([key(keys.vk, Stroke::Down), key(keys.vk, Stroke::Up)]);
+    inputs.extend(modifiers.iter().rev().map(|&vk| key(vk, Stroke::Up)));
     send(&inputs)
 }

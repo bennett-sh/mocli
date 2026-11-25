@@ -1,5 +1,6 @@
 //! Everything that talks to Win32.
 
+pub mod autostart;
 pub mod caret;
 pub mod clipboard;
 pub mod clipboard_write;
@@ -11,10 +12,12 @@ mod placement;
 pub mod shell;
 pub mod shell_image;
 pub mod single_instance;
-mod source_app;
+pub mod source_app;
 pub mod tray;
 pub mod version;
 pub mod window;
+
+use std::path::PathBuf;
 
 use gpui_kit::Keystroke;
 use windows::Win32::{
@@ -57,10 +60,30 @@ pub enum Event {
         how: Activation,
     },
     HistoryChanged,
-    /// Put text on the clipboard and close, for values derived from an entry.
-    CopyText(String),
+    /// Put derived text on the clipboard and close, pasting it if asked.
+    UseText {
+        text: String,
+        paste: bool,
+    },
+    /// Open an address or a file with its default program.
+    Open(OpenTarget),
+    /// Show a file in Explorer.
+    Reveal(PathBuf),
+    /// Ask where to keep a copy of a stored image.
+    SaveImage(PathBuf),
+    /// Stop saving what a program copies.
+    IgnoreApp(String),
+    TogglePrivate,
+    ConfigChanged,
+    OpenSettings,
     OpenConfig,
     Quit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenTarget {
+    Address(String),
+    File(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

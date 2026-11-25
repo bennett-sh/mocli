@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, ToSql, params};
 
 use self::blobs::Blobs;
 pub use self::query::{Details, Payload, Results, Summary};
@@ -267,6 +267,56 @@ impl Store {
         })
     }
 
+    pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<()> {
+        self.db.execute(
+            "UPDATE entries SET pinned = ?2 WHERE id = ?1",
+            params![id, pinned],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete(&mut self, id: i64) -> Result<()> {
+        self.delete_where("id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// How many entries `delete_from_source` would remove.
+    pub fn count_from_source(&self, exe: &str) -> Result<usize> {
+        let count: i64 = self.db.query_row(
+            "SELECT count(*) FROM entries WHERE pinned = 0 AND source_exe = ?1 COLLATE NOCASE",
+            [exe],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Removes the unpinned entries copied from one program.
+    pub fn delete_from_source(&mut self, exe: &str) -> Result<usize> {
+        self.delete_where(
+            "pinned = 0 AND source_exe = ?1 COLLATE NOCASE",
+            params![exe],
+        )
+    }
+
+    /// Removes everything except pinned entries.
+    pub fn clear_unpinned(&mut self) -> Result<usize> {
+        self.delete_where("pinned = 0", params![])
+    }
+
+    /// Deletes the matching entries and their files.
+    fn delete_where(&mut self, condition: &str, values: &[&dyn ToSql]) -> Result<usize> {
+        let mut query = self.db.prepare(&format!(
+            "DELETE FROM entries WHERE {condition} RETURNING hash"
+        ))?;
+        let removed = query
+            .query_map(values, |row| row.get::<_, [u8; 32]>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for hash in &removed {
+            self.blobs.remove(&hex(*hash));
+        }
+        Ok(removed.len())
+    }
+
     /// Removes unpinned entries beyond the count or age limits; zero means no
     /// limit. Returns how many were removed.
     pub fn prune(&mut self, max_entries: u32, max_age_days: u32, now: i64) -> Result<usize> {
@@ -279,20 +329,13 @@ impl Store {
             0 => -1,
             count => i64::from(count),
         };
-        let mut query = self.db.prepare(
-            "DELETE FROM entries WHERE pinned = 0 AND (
+        self.delete_where(
+            "pinned = 0 AND (
                  last_copied < ?1
                  OR id NOT IN (SELECT id FROM entries WHERE pinned = 0
-                               ORDER BY last_copied DESC, id DESC LIMIT ?2))
-             RETURNING hash",
-        )?;
-        let removed = query
-            .query_map(params![cutoff, limit], |row| row.get::<_, [u8; 32]>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for hash in &removed {
-            self.blobs.remove(&hex(*hash));
-        }
-        Ok(removed.len())
+                               ORDER BY last_copied DESC, id DESC LIMIT ?2))",
+            params![cutoff, limit],
+        )
     }
 }
 
@@ -456,6 +499,36 @@ pub mod tests {
         assert_eq!(scratch.blob_count(), 4);
         store.prune(1, 0, 3).unwrap();
         assert_eq!(scratch.blob_count(), 2);
+    }
+
+    #[test]
+    fn deletes_by_entry_source_or_everything_unpinned() {
+        let scratch = Scratch::new("delete");
+        let mut store = Store::open(&scratch.0).unwrap();
+        let from = |name: &str, exe: &str, at| NewEntry {
+            source: Some(Source {
+                exe: exe.into(),
+                name: exe.into(),
+                window_title: None,
+            }),
+            ..picture(name, at)
+        };
+        let a = store.record(&from("a", r"C:\A.exe", 1)).unwrap().id;
+        let b = store.record(&from("b", r"c:\a.EXE", 2)).unwrap().id;
+        let c = store.record(&from("c", r"C:\other.exe", 3)).unwrap().id;
+        let d = store.record(&from("d", r"C:\other.exe", 4)).unwrap().id;
+        store.set_pinned(b, true).unwrap();
+        store.set_pinned(d, true).unwrap();
+
+        assert_eq!(store.count_from_source(r"C:\a.exe").unwrap(), 1);
+        assert_eq!(store.delete_from_source(r"C:\a.exe").unwrap(), 1);
+        assert!(store.details(a).unwrap().is_none());
+        store.delete(d).unwrap();
+        assert_eq!(store.clear_unpinned().unwrap(), 1);
+        assert!(store.details(c).unwrap().is_none());
+        assert!(store.details(b).unwrap().unwrap().pinned);
+        assert_eq!(scratch.blob_count(), 2);
+        assert_eq!(matches(&store, "other"), 0);
     }
 
     #[test]

@@ -7,9 +7,13 @@ use gpui_kit::component::Root;
 use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use image::{Rgba, RgbaImage};
 
-use super::popup::{self, Popup};
+use super::{
+    popup::{self, Popup},
+    settings,
+};
 use crate::{
-    config::Backdrop,
+    capture::Source,
+    config::{Config, PrimaryAction, SharedConfig},
     ingest::link::Preview,
     platform::{Activation, Event},
     store::{
@@ -76,6 +80,15 @@ pub struct Harness<'a> {
 
 impl Harness<'_> {
     pub fn open<'a>(cx: &'a mut TestAppContext, name: &str, entries: Vec<NewEntry>) -> Harness<'a> {
+        Self::configured(cx, name, entries, Config::default())
+    }
+
+    pub fn configured<'a>(
+        cx: &'a mut TestAppContext,
+        name: &str,
+        entries: Vec<NewEntry>,
+        config: Config,
+    ) -> Harness<'a> {
         let scratch = Scratch::new(name);
         let store = SharedStore::new(Store::open(&scratch.0).unwrap());
         let ids = entries
@@ -84,14 +97,14 @@ impl Harness<'_> {
             .collect();
         cx.update(|cx| {
             gpui_kit::init(cx);
-            popup::bind_keys(cx);
+            popup::bind_keys(&config.keys, cx);
         });
 
         let (sender, events) = async_channel::unbounded();
         let mut view = None;
         let shared = store.clone();
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let popup = cx.new(|cx| Popup::new(shared, Backdrop::Solid, sender, window, cx));
+            let popup = cx.new(|cx| Popup::new(shared, &config, sender, window, cx));
             view = Some(popup.clone());
             Root::new(popup, window, cx)
         });
@@ -116,6 +129,29 @@ impl Harness<'_> {
     pub fn type_text(&mut self, text: &str) {
         self.cx.simulate_input(text);
         self.cx.run_until_parked();
+    }
+
+    /// The titles in the history, top to bottom.
+    pub fn titles(&mut self) -> Vec<String> {
+        self.store
+            .lock()
+            .search("", &[], 100)
+            .unwrap()
+            .matches
+            .into_iter()
+            .map(|entry| entry.title)
+            .collect()
+    }
+
+    pub fn event(&mut self) -> Event {
+        self.events.try_recv().expect("an event was sent")
+    }
+
+    /// Chooses the action whose label matches `query` in the actions panel.
+    pub fn action(&mut self, query: &str) {
+        self.press("ctrl-k");
+        self.type_text(query);
+        self.press("enter");
     }
 
     /// The entry Enter would paste now.
@@ -204,4 +240,167 @@ fn keys_search_filter_and_activate(cx: &mut TestAppContext) {
             ..
         })
     ));
+}
+
+fn from_app(content: &str, exe: &str, at: i64) -> NewEntry {
+    NewEntry {
+        source: Some(Source {
+            exe: exe.into(),
+            name: exe.trim_end_matches(".exe").into(),
+            window_title: None,
+        }),
+        ..text(content, at)
+    }
+}
+
+fn three() -> Vec<NewEntry> {
+    vec![
+        from_app("alpha", "one.exe", 1),
+        from_app("bravo", "two.exe", 2),
+        from_app("charlie", "two.exe", 3),
+    ]
+}
+
+#[gpui_kit::test]
+fn pin_and_delete_by_key(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-pin", three());
+    ui.press("down down ctrl-p");
+    assert_eq!(ui.titles(), ["alpha", "charlie", "bravo"]);
+    // The pinned entry stays selected.
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[0]));
+    ui.press("ctrl-p up ctrl-backspace");
+    assert_eq!(ui.titles(), ["charlie", "alpha"]);
+    // The neighbor takes its place.
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[0]));
+
+    // While searching, the keys edit the query instead.
+    ui.type_text("char");
+    ui.press("ctrl-backspace");
+    assert_eq!(ui.titles().len(), 2);
+    ui.press("delete");
+    assert_eq!(ui.titles(), ["alpha"]);
+}
+
+#[gpui_kit::test]
+fn number_keys_paste_that_row(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-slots", three());
+    ui.press("ctrl-3");
+    let oldest = ui.ids[0];
+    assert!(matches!(
+        ui.event(),
+        Event::Activate { id, how: Activation::Paste } if id == oldest
+    ));
+    ui.press("ctrl-9");
+    assert!(ui.events.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn enter_can_copy_instead(cx: &mut TestAppContext) {
+    let mut config = Config::default();
+    config.general.primary_action = PrimaryAction::Copy;
+    config.keys.insert("pin".into(), "ctrl-j".into());
+    config.keys.insert("delete".into(), "not a key+".into());
+    let mut ui = Harness::configured(cx, "ui-primary", three(), config);
+    ui.press("enter");
+    assert!(matches!(
+        ui.event(),
+        Event::Activate {
+            how: Activation::Copy,
+            ..
+        }
+    ));
+    ui.press("ctrl-enter");
+    assert!(matches!(
+        ui.event(),
+        Event::Activate {
+            how: Activation::Paste,
+            ..
+        }
+    ));
+    ui.press("down ctrl-j");
+    assert_eq!(ui.titles()[0], "bravo");
+}
+
+#[gpui_kit::test]
+fn actions_panel_runs_what_is_chosen(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-actions", three());
+    ui.action("pin to");
+    assert_eq!(ui.titles()[0], "charlie");
+    let pinned = ui.store.lock().details(ui.ids[2]).unwrap().unwrap().pinned;
+    assert!(pinned);
+
+    // Escape closes the panel, and typing searches again.
+    ui.press("ctrl-k escape");
+    ui.type_text("brav");
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[1]));
+    ui.press("escape");
+
+    ui.action("settings");
+    assert!(matches!(ui.event(), Event::OpenSettings));
+    ui.action("pause");
+    assert!(matches!(ui.event(), Event::TogglePrivate));
+}
+
+#[gpui_kit::test]
+fn deleting_many_asks_first(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-confirm", three());
+    ui.action("delete all");
+    // Ctrl+K closes the question without deleting.
+    ui.press("ctrl-k");
+    assert_eq!(ui.titles().len(), 3);
+
+    ui.action("delete all");
+    ui.press("enter");
+    assert_eq!(ui.titles(), ["alpha"]);
+
+    ui.action("clear history");
+    ui.type_text("cancel");
+    ui.press("enter");
+    assert_eq!(ui.titles(), ["alpha"]);
+    ui.action("clear history");
+    ui.press("enter");
+    assert!(ui.titles().is_empty());
+}
+
+#[gpui_kit::test]
+fn colors_and_edits_become_text(cx: &mut TestAppContext) {
+    let entries = vec![of_kind(Kind::Color, "#ff7a1a", 1)];
+    let mut ui = Harness::open(cx, "ui-text", entries);
+    ui.action("as rgb");
+    assert!(matches!(
+        ui.event(),
+        Event::UseText { text, paste: false } if text == "rgb(255, 122, 26)"
+    ));
+
+    ui.press("ctrl-e");
+    ui.type_text("!");
+    ui.press("ctrl-enter");
+    match ui.event() {
+        Event::UseText { text, paste: true } => {
+            assert!(text.contains('!') && text.len() == 8, "{text}")
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    ui.press("escape");
+    assert!(ui.events.try_recv().is_err(), "Escape only left the editor");
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[0]));
+}
+
+#[gpui_kit::test]
+fn settings_window_draws(cx: &mut TestAppContext) {
+    let scratch = Scratch::new("ui-settings");
+    let config = SharedConfig::load(scratch.0.join("config.toml"));
+    let store = SharedStore::new(Store::open(&scratch.0).unwrap());
+    let (events, _received) = async_channel::unbounded();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        settings::init(config.clone(), store, events, cx);
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|_| settings::SettingsView);
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    // Merely drawing the fields must not change anything.
+    assert_eq!(config.get(), Config::default());
 }

@@ -4,6 +4,7 @@ mod classify;
 pub mod code;
 pub mod link;
 mod picture;
+mod sensitive;
 
 use std::{
     fs,
@@ -17,14 +18,19 @@ use anyhow::Result;
 
 use self::classify::Primary;
 use crate::{
-    capture::Snapshot,
-    config::{CaptureKind, History, Previews},
+    capture::{RawImage, Snapshot},
+    config::{CaptureKind, History, Sensitive, SharedConfig},
     platform::shell_image,
     store::{Format, Image, Kind, NewEntry, SharedStore},
 };
 
 #[cfg(test)]
 pub use self::picture::decode;
+
+/// Any clipboard picture as PNG data.
+pub fn to_png(raw: &RawImage) -> Result<Vec<u8>> {
+    Ok(picture::encode(raw)?.png)
+}
 
 const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
@@ -49,8 +55,7 @@ struct LinkRequest {
 /// calling `changed` after each one.
 pub fn spawn(
     store: SharedStore,
-    settings: History,
-    previews: Previews,
+    config: SharedConfig,
     snapshots: Receiver<Snapshot>,
     changed: impl Fn() + Clone + Send + 'static,
 ) -> Result<()> {
@@ -59,9 +64,19 @@ pub fn spawn(
         .name("ingest".into())
         .spawn(move || {
             shell_image::init_thread();
-            prune(&store, &settings);
+            prune(&store, &config.get().history);
             for snapshot in snapshots {
-                let entry = match process(snapshot, &settings) {
+                let settings = config.get();
+                if settings.privacy.sensitive == Sensitive::Skip
+                    && snapshot
+                        .text
+                        .as_deref()
+                        .is_some_and(sensitive::is_sensitive)
+                {
+                    tracing::info!("skipped a copy that looks like a secret");
+                    continue;
+                }
+                let entry = match process(snapshot, &settings.history) {
                     Ok(Some(entry)) => entry,
                     Ok(None) => continue,
                     Err(error) => {
@@ -81,7 +96,7 @@ pub fn spawn(
                             "entry stored"
                         );
                         add_icons(&store, &entry);
-                        if previews.fetch_links
+                        if settings.previews.fetch_links
                             && recorded.new
                             && let Some(request) = link_request(recorded.id, &entry)
                         {
@@ -93,7 +108,7 @@ pub fn spawn(
                         tracing::error!(error = format!("{error:#}"), "could not store a copy")
                     }
                 }
-                prune(&store, &settings);
+                prune(&store, &settings.history);
                 changed();
             }
         })?;
@@ -322,7 +337,7 @@ fn image_entry(picture: picture::Picture, max_image_mb: u32) -> Option<NewEntry>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::{RawImage, Source};
+    use crate::capture::Source;
 
     fn run(snapshot: Snapshot) -> Option<NewEntry> {
         process(snapshot, &History::default()).unwrap()

@@ -39,7 +39,7 @@ use windows::{
 use super::source_app;
 use crate::{
     capture::{RawImage, Snapshot, Source},
-    config::Privacy,
+    config::SharedConfig,
     ingest::now_millis,
 };
 
@@ -85,18 +85,18 @@ impl Registered {
 struct Watcher {
     window: HWND,
     formats: Registered,
-    privacy: Privacy,
+    config: SharedConfig,
     snapshots: Sender<Snapshot>,
     last_sequence: u32,
 }
 
 /// Starts watching and returns once changes are being observed.
-pub fn spawn(privacy: Privacy, snapshots: Sender<Snapshot>) -> Result<()> {
+pub fn spawn(config: SharedConfig, snapshots: Sender<Snapshot>) -> Result<()> {
     let (ready_tx, ready_rx) = mpsc::channel();
 
     thread::Builder::new()
         .name("clipboard".into())
-        .spawn(move || match Watcher::new(privacy, snapshots) {
+        .spawn(move || match Watcher::new(config, snapshots) {
             Ok(watcher) => {
                 let _ = ready_tx.send(Ok(()));
                 watcher.run();
@@ -112,7 +112,7 @@ pub fn spawn(privacy: Privacy, snapshots: Sender<Snapshot>) -> Result<()> {
 }
 
 impl Watcher {
-    fn new(privacy: Privacy, snapshots: Sender<Snapshot>) -> Result<Self> {
+    fn new(config: SharedConfig, snapshots: Sender<Snapshot>) -> Result<Self> {
         // SAFETY: a message-only window of a system class, owned by this
         // thread until the process exits.
         let window = unsafe {
@@ -136,7 +136,7 @@ impl Watcher {
         Ok(Self {
             window,
             formats: Registered::new(),
-            privacy,
+            config,
             snapshots,
             // Whatever is already on the clipboard was not copied while we ran.
             last_sequence: unsafe { GetClipboardSequenceNumber() },
@@ -180,8 +180,12 @@ impl Watcher {
         }
         self.last_sequence = sequence;
 
+        let privacy = self.config.read(|config| config.privacy.clone());
+        if privacy.private_mode {
+            return;
+        }
         if let Some(source) = &source
-            && self.privacy.ignores(&source.exe)
+            && privacy.ignores(&source.exe)
         {
             tracing::debug!(app = %source.name, "skipped a copy from an ignored app");
             return;
@@ -197,7 +201,7 @@ impl Watcher {
         if is_available(self.formats.own) {
             return;
         }
-        if self.privacy.respect_exclusion_formats && self.is_excluded() {
+        if privacy.respect_exclusion_formats && self.is_excluded() {
             tracing::debug!("skipped content marked as private");
             return;
         }
@@ -205,7 +209,7 @@ impl Watcher {
         let snapshot = Snapshot {
             source,
             copied_at,
-            ..self.read()
+            ..read(&self.formats)
         };
         // Asking for delayed formats can itself move the sequence on.
         // SAFETY: plain query.
@@ -220,35 +224,42 @@ impl Watcher {
             || data(self.formats.include_in_history, MAX_FORMAT_BYTES)
                 .is_some_and(|bytes| bytes.iter().take(4).all(|&byte| byte == 0))
     }
+}
 
-    /// Must be called while the clipboard is open.
-    fn read(&self) -> Snapshot {
-        let files = files();
-        // File copies carry no other content worth keeping.
-        if !files.is_empty() {
-            return Snapshot {
-                files,
-                ..Snapshot::default()
-            };
-        }
+/// What is on the clipboard now, for putting it back later.
+pub fn current(window: HWND) -> Option<Snapshot> {
+    let formats = Registered::new();
+    let _open = Clipboard::open(window).ok()?;
+    Some(read(&formats))
+}
 
-        let text = data(CF_UNICODETEXT.0.into(), MAX_TEXT_BYTES).map(|bytes| utf16(&bytes));
-        let has_text = text.is_some();
-        // PNG keeps transparency. `CF_DIB` decodes more reliably than the V5
-        // variant Windows synthesizes from it.
-        let image = data(self.formats.png, MAX_IMAGE_BYTES)
-            .map(RawImage::Png)
-            .or_else(|| data(CF_DIB.0.into(), MAX_IMAGE_BYTES).map(RawImage::Dib))
-            .or_else(|| data(CF_DIBV5.0.into(), MAX_IMAGE_BYTES).map(RawImage::Dib));
-        let rich = |format| has_text.then(|| data(format, MAX_FORMAT_BYTES)).flatten();
-
-        Snapshot {
-            html: rich(self.formats.html),
-            rtf: rich(self.formats.rtf),
-            text,
-            image,
+/// Must be called while the clipboard is open.
+fn read(formats: &Registered) -> Snapshot {
+    let files = files();
+    // File copies carry no other content worth keeping.
+    if !files.is_empty() {
+        return Snapshot {
+            files,
             ..Snapshot::default()
-        }
+        };
+    }
+
+    let text = data(CF_UNICODETEXT.0.into(), MAX_TEXT_BYTES).map(|bytes| utf16(&bytes));
+    let has_text = text.is_some();
+    // PNG keeps transparency. `CF_DIB` decodes more reliably than the V5
+    // variant Windows synthesizes from it.
+    let image = data(formats.png, MAX_IMAGE_BYTES)
+        .map(RawImage::Png)
+        .or_else(|| data(CF_DIB.0.into(), MAX_IMAGE_BYTES).map(RawImage::Dib))
+        .or_else(|| data(CF_DIBV5.0.into(), MAX_IMAGE_BYTES).map(RawImage::Dib));
+    let rich = |format| has_text.then(|| data(format, MAX_FORMAT_BYTES)).flatten();
+
+    Snapshot {
+        html: rich(formats.html),
+        rtf: rich(formats.rtf),
+        text,
+        image,
+        ..Snapshot::default()
     }
 }
 

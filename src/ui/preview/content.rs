@@ -149,7 +149,10 @@ pub fn color(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
                         .child(value),
                 )
                 .on_click(cx.listener(move |popup, _, _, _| {
-                    popup.send(Event::CopyText(copied.clone()));
+                    popup.send(Event::UseText {
+                        text: copied.clone(),
+                        paste: false,
+                    });
                 }))
         })
         .collect();

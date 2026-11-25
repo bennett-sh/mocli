@@ -58,6 +58,11 @@ fn process_id(window: HWND) -> u32 {
     id
 }
 
+/// The program a window belongs to.
+pub fn executable_of(window: HWND) -> Option<String> {
+    process_path(process_id(window))
+}
+
 fn process_path(id: u32) -> Option<String> {
     if id == 0 {
         return None;

@@ -47,6 +47,10 @@ impl KeyFilter {
         }
     }
 
+    pub fn set_hotkey(&mut self, hotkey: Hotkey) {
+        self.hotkey = hotkey;
+    }
+
     pub fn key_up(&mut self, vk: u16) -> Verdict {
         let index = usize::from(vk & 0xFF);
         self.passed[index] = false;

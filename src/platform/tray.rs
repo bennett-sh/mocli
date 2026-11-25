@@ -4,22 +4,39 @@ use anyhow::Result;
 use async_channel::Sender;
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
 use super::Event;
 
 const SHOW: &str = "show";
+const PAUSE: &str = "pause";
+const SETTINGS: &str = "settings";
 const CONFIG: &str = "config";
 const QUIT: &str = "quit";
 
-/// Must be created on the thread that runs the UI message loop. Dropping the
-/// returned value removes the icon.
-pub fn create(events: Sender<Event>) -> Result<TrayIcon> {
+/// The tray icon, which disappears when this is dropped.
+pub struct Tray {
+    _icon: TrayIcon,
+    pause: CheckMenuItem,
+}
+
+impl Tray {
+    pub fn set_paused(&self, paused: bool) {
+        self.pause.set_checked(paused);
+    }
+}
+
+/// Must be created on the thread that runs the UI message loop.
+pub fn create(events: Sender<Event>) -> Result<Tray> {
+    let pause = CheckMenuItem::with_id(PAUSE, "Pause capture", true, false, None);
     let menu = Menu::new();
     menu.append_items(&[
         &MenuItem::with_id(SHOW, "Show clipboard history", true, None),
-        &MenuItem::with_id(CONFIG, "Edit config", true, None),
+        &pause,
+        &PredefinedMenuItem::separator(),
+        &MenuItem::with_id(SETTINGS, "Settings…", true, None),
+        &MenuItem::with_id(CONFIG, "Edit config file", true, None),
         &PredefinedMenuItem::separator(),
         &MenuItem::with_id(QUIT, "Quit mocli", true, None),
     ])?;
@@ -28,6 +45,8 @@ pub fn create(events: Sender<Event>) -> Result<TrayIcon> {
     MenuEvent::set_event_handler(Some(Arc::new(move |event: MenuEvent| {
         let event = match event.id.as_ref() {
             SHOW => Event::Show,
+            PAUSE => Event::TogglePrivate,
+            SETTINGS => Event::OpenSettings,
             CONFIG => Event::OpenConfig,
             QUIT => Event::Quit,
             _ => return,
@@ -46,15 +65,16 @@ pub fn create(events: Sender<Event>) -> Result<TrayIcon> {
         }
     }));
 
-    Ok(TrayIconBuilder::new()
+    let icon = TrayIconBuilder::new()
         .with_tooltip("mocli: clipboard history")
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
         .with_icon(icon()?)
-        .build()?)
+        .build()?;
+    Ok(Tray { _icon: icon, pause })
 }
 
-/// A small clipboard, drawn in code until the app has artwork.
+/// A small clipboard, drawn in code like the application icon.
 fn icon() -> Result<Icon> {
     const SIZE: u32 = 32;
     let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);

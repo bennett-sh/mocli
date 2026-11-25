@@ -46,6 +46,8 @@ static DIVERTS_KEYS: AtomicBool = AtomicBool::new(true);
 /// The window that had focus when the popup opened.
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static POPUP_RECT: Mutex<Option<RECT>> = Mutex::new(None);
+/// A new shortcut the hook thread has yet to take over.
+static NEW_HOTKEY: Mutex<Option<Hotkey>> = Mutex::new(None);
 
 struct State {
     filter: KeyFilter,
@@ -76,6 +78,15 @@ pub fn close() {
 /// The window that had focus when the popup last opened.
 pub fn target() -> HWND {
     HWND(TARGET.load(Ordering::SeqCst) as *mut _)
+}
+
+/// Changes the shortcut and whether an open popup receives keys through the
+/// hook.
+pub fn configure(hotkey: Hotkey, divert_keys: bool) {
+    DIVERTS_KEYS.store(divert_keys, Ordering::SeqCst);
+    if let Ok(mut new) = NEW_HOTKEY.lock() {
+        *new = Some(hotkey);
+    }
 }
 
 /// Screen area of the popup; clicks outside it close the popup.
@@ -205,6 +216,12 @@ fn handle_key(message: u32, key: KBDLLHOOKSTRUCT) -> bool {
     let capturing = open && DIVERTS_KEYS.load(Ordering::SeqCst);
     let verdict = STATE.with_borrow_mut(|state| {
         state.as_mut().map_or(Verdict::Pass, |state| {
+            // Never wait here: a slow hook is dropped by Windows.
+            if let Ok(mut new) = NEW_HOTKEY.try_lock()
+                && let Some(hotkey) = new.take()
+            {
+                state.filter.set_hotkey(hotkey);
+            }
             if down {
                 state.filter.key_down(vk, mods, capturing)
             } else {

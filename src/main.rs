@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let config = config::Config::load_or_create(&paths::config_file()?);
+    let config = config::SharedConfig::load(paths::config_file()?);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
     app::run(config)
