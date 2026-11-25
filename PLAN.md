@@ -101,7 +101,8 @@ The schema lives in `src/store/schema.sql` (versioned through `user_version`):
 - `entries_fts`: trigram FTS5 index over title, text and source name.
 - Images are `blobs/<hash>.png` plus `<hash>.thumb.png`, next to `history.db` in
   `%LOCALAPPDATA%\mocli` (`MOCLI_DATA_DIR` overrides it).
-  The database (SQLCipher) and blobs (XChaCha20-Poly1305) are encrypted with a
+  Optionally (off by default), the database (SQLCipher) and blobs
+  (XChaCha20-Poly1305) are encrypted with a
   random key, wrapped by a non-exportable TPM key and sealed to the Windows
   account (`store/vault.rs`; added after 0.1.0).
 
@@ -179,7 +180,7 @@ Popup layout mirrors the screenshots: **header** (back/clear button, search inpu
 |---|---|
 | Search field | `input::Input` / `InputState` (large, borderless, `appearance(false)`) |
 | Type filter "All Types ▾" | `select::Select` with searchable dropdown (All, Text, Images, Files, Links, Emails, Colors, Code, Pinned) — matches screenshot 2 |
-| History list | `list::List` + `ListDelegate` (virtualized, section headers "Pinned / Today / Yesterday / This Week / This Month / Older", keyboard selection built in) |
+| History list | `list::List` + `ListDelegate` (virtualized, section headers "Today / Yesterday / This Week / This Month / Older", keyboard selection built in) |
 | Row | `ListItem` + `Icon`/`img`, `Kbd` for quick-select `Ctrl+1…9` |
 | Preview text | `text::TextView` / `highlighter` |
 | Info table | `description_list::DescriptionList` |
@@ -249,7 +250,7 @@ animations = true
 
 [history]
 max_entries = 1000
-max_age_days = 90           # 0 = forever; pinned exempt
+keep_for = "3mo"            # 1h … 3mo | forever; pinned exempt
 max_image_mb = 25
 capture = ["text","image","file","html"]
 ocr_images = true

@@ -9,9 +9,9 @@ mod sensitive;
 use std::{
     fs,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -32,6 +32,8 @@ pub fn to_png(raw: &RawImage) -> Result<Vec<u8>> {
     Ok(picture::encode(raw)?.png)
 }
 
+/// How often old entries are removed while nothing is copied.
+const EXPIRY_CHECK: Duration = Duration::from_secs(60);
 const MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
 /// Edge length of the icons stored for files and source apps.
@@ -72,7 +74,18 @@ pub fn spawn(
         .spawn(move || {
             shell_image::init_thread();
             prune(&store, &config.get().history);
-            for snapshot in snapshots {
+            loop {
+                let snapshot = match snapshots.recv_timeout(EXPIRY_CHECK) {
+                    Ok(snapshot) => snapshot,
+                    // Entries also expire while nothing is copied.
+                    Err(RecvTimeoutError::Timeout) => {
+                        if prune(&store, &config.get().history) > 0 {
+                            changed();
+                        }
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                };
                 let settings = config.get();
                 if settings.privacy.sensitive == Sensitive::Skip
                     && snapshot
@@ -233,14 +246,24 @@ fn spawn_link_fetcher(
     Ok(requests)
 }
 
-fn prune(store: &SharedStore, settings: &History) {
-    let removed = store
-        .lock()
-        .prune(settings.max_entries, settings.max_age_days, now_millis());
+/// Applies the history limits. Returns how many entries were removed.
+pub fn prune(store: &SharedStore, settings: &History) -> usize {
+    let removed = store.lock().prune(
+        settings.max_entries,
+        settings.keep_for.duration(),
+        now_millis(),
+    );
     match removed {
-        Ok(0) => {}
-        Ok(removed) => tracing::debug!(removed, "old entries removed"),
-        Err(error) => tracing::warn!(error = format!("{error:#}"), "could not prune the history"),
+        Ok(removed) => {
+            if removed > 0 {
+                tracing::debug!(removed, "old entries removed");
+            }
+            removed
+        }
+        Err(error) => {
+            tracing::warn!(error = format!("{error:#}"), "could not prune the history");
+            0
+        }
     }
 }
 

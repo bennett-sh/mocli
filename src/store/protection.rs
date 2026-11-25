@@ -60,9 +60,9 @@ fn state(database: &Path) -> Result<State> {
 
 impl Store {
     /// Opens the history in `directory`, first encrypting or decrypting it if
-    /// `encrypt` asks for the other form. Fails with [`Locked`] if it is
-    /// encrypted and the key is unusable.
-    pub fn open_protected(directory: &Path, encrypt: bool, tpm_key: &str) -> Result<Self> {
+    /// `encrypt` asks for the other form; `None` leaves it as it is. Fails with
+    /// [`Locked`] if it is encrypted and the key is unusable.
+    pub fn open_protected(directory: &Path, encrypt: Option<bool>, tpm_key: &str) -> Result<Self> {
         fs::create_dir_all(directory)
             .with_context(|| format!("could not create {}", directory.display()))?;
         let database = directory.join(DATABASE);
@@ -70,6 +70,7 @@ impl Store {
         remove_if_present(&directory.join(CONVERTING))?;
 
         let state = state(&database)?;
+        let encrypt = encrypt.unwrap_or(state == State::Encrypted);
         let stored = vault::load(directory, tpm_key);
         let key: Option<(MasterKey, Protector)> = match state {
             State::Encrypted => {

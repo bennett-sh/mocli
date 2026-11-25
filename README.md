@@ -26,7 +26,7 @@ asks before the first start.
 | `Shift+Enter` | Paste as plain text |
 | `Ctrl+1` … `Ctrl+9` | Paste that entry |
 | `Ctrl+K` | All actions for the entry |
-| `Ctrl+P` | Pin or unpin |
+| `Ctrl+P` | Pin to keep, or unpin |
 | `Ctrl+Backspace` / `Del` | Delete (with an empty search) |
 | `Ctrl+E` | Edit, then paste |
 | `Ctrl+O` | Open the link, file or image |
@@ -42,9 +42,21 @@ with a preview and the program it came from.
 Open them from the tray icon or with `Ctrl+,`, or edit
 `%APPDATA%\mocli\config.toml`; changes apply as soon as the file is saved.
 
+## How long entries are kept
+
+Entries are deleted 3 months after they were last copied. "Keep history for" in
+the History settings also offers 1, 6, 12 and 24 hours, 3 days, 1 week, 1 month
+and forever (`keep_for` in the config file). Separately, only the newest 1000
+entries stay unless you change that limit.
+
+`Ctrl+P` pins an entry: it stays where it is in the list and is kept beyond both
+limits until you delete or unpin it. An unpinned entry that is already too old
+is deleted within a minute.
+
 ## Privacy
 
-- The history in `%LOCALAPPDATA%\mocli` is [encrypted](#encryption).
+- The history stays in `%LOCALAPPDATA%\mocli`. You can
+  [encrypt](#encryption) it.
 - Content that apps mark as private is never saved, nor are copies from
   1Password, Bitwarden and KeePass, nor anything that looks like a card number,
   private key or access token. These checks cannot catch every secret; pause
@@ -54,7 +66,16 @@ Open them from the tray icon or with `Ctrl+,`, or edit
 
 ## Encryption
 
-The database (SQLCipher, AES-256) and the picture files (XChaCha20-Poly1305) are
+Encryption is off unless you switch on "Encrypt history" in the Privacy settings
+(`encrypt_history = true`), and takes effect after restarting mocli.
+
+> **You can lose your history.** The key is tied to your PC and Windows account.
+> If the TPM chip is cleared or replaced, Windows is reinstalled, an
+> administrator resets your password, or you move to another PC or account,
+> nobody can recover an encrypted history, pinned entries included. mocli then
+> asks whether to start a new one, and keeps the unreadable files.
+
+When on, the database (SQLCipher, AES-256) and the picture files (XChaCha20-Poly1305) are
 encrypted with a random key. That key is wrapped by an RSA key that is created
 inside the TPM chip and cannot be exported, and the result is sealed to your
 Windows account. There is no password to type. A PC without a usable TPM relies
@@ -64,15 +85,11 @@ on the Windows account alone; the Privacy settings say which is in use.
   user cannot read them.
 - It does **not** protect against software running as you while you are signed
   in, which can ask for the key just as mocli does.
-- The history cannot move to another PC or Windows account. Clearing the TPM,
-  reinstalling Windows or having an administrator reset your password loses it.
-  mocli then asks whether to start a new history, and keeps the old files.
 - Opening a stored picture in another program leaves a readable copy until mocli
   next starts or quits. "Save image" writes a readable file where you choose.
-- Turning encryption on converts the existing history. The old unencrypted data
-  is deleted, but may remain recoverable from the disk for a while.
-- A portable copy is not encrypted unless `encryption = "on"`, because it could
-  then only be read on the PC that wrote it.
+- Turning encryption on or off converts the existing history. Old unencrypted
+  data is deleted, but may remain recoverable from the disk for a while.
+- An encrypted portable copy can only be read on the PC that wrote it.
 
 ## Limitations
 

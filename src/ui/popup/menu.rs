@@ -107,7 +107,7 @@ fn entry_items(selected: &Selected, primary: PrimaryAction) -> Vec<Item> {
     items.push(if details.pinned {
         item("Unpin", IconName::PinOff, TogglePin)
     } else {
-        item("Pin to top", IconName::Pin, TogglePin)
+        item("Pin to keep", IconName::Pin, TogglePin)
     });
     if textual && details.kind != Kind::Files {
         items.push(item("Edit and paste", IconName::Pencil, EditEntry));

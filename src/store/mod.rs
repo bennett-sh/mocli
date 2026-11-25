@@ -29,7 +29,6 @@ const SCHEMA_VERSION: i64 = 2;
 const DATABASE: &str = "history.db";
 /// Where copies of stored pictures are put for other programs to open.
 pub const OPENED: &str = "opened";
-const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -343,13 +342,17 @@ impl Store {
         Ok(removed.len())
     }
 
-    /// Removes unpinned entries beyond the count or age limits; zero means no
-    /// limit. Returns how many were removed.
-    pub fn prune(&mut self, max_entries: u32, max_age_days: u32, now: i64) -> Result<usize> {
-        let cutoff = match max_age_days {
-            0 => i64::MIN,
-            days => now - i64::from(days) * MILLIS_PER_DAY,
-        };
+    /// Removes unpinned entries older than `max_age` or beyond the newest
+    /// `max_entries`, where zero means no limit. Returns how many were removed.
+    pub fn prune(
+        &mut self,
+        max_entries: u32,
+        max_age: Option<Duration>,
+        now: i64,
+    ) -> Result<usize> {
+        let cutoff = max_age.map_or(i64::MIN, |age| {
+            now.saturating_sub(i64::try_from(age.as_millis()).unwrap_or(i64::MAX))
+        });
         // SQLite reads a negative `LIMIT` as unlimited.
         let limit = match max_entries {
             0 => -1,
@@ -429,6 +432,9 @@ pub mod tests {
     use std::{fs, path::PathBuf};
 
     use super::*;
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    const DAY_MILLIS: i64 = DAY.as_millis() as i64;
 
     /// A directory removed when the test ends.
     pub struct Scratch(pub PathBuf);
@@ -528,7 +534,7 @@ pub mod tests {
         let mut store = Store::open(&scratch.0).unwrap();
         store.record(&text("clipboard history", 1)).unwrap();
         assert_eq!(matches(&store, "board"), 1);
-        store.prune(0, 1, 10 * MILLIS_PER_DAY).unwrap();
+        store.prune(0, Some(DAY), 10 * DAY_MILLIS).unwrap();
         assert_eq!(matches(&store, "board"), 0);
         store
             .db
@@ -548,10 +554,29 @@ pub mod tests {
             .execute("UPDATE entries SET pinned = 1 WHERE title = 'pinned'", [])
             .unwrap();
 
-        assert_eq!(store.prune(2, 0, 100).unwrap(), 1);
+        assert_eq!(store.prune(2, None, 100).unwrap(), 1);
         assert_eq!(matches(&store, "old"), 0);
         assert_eq!(count(&store, "SELECT count(*) FROM entries"), 3);
-        assert_eq!(store.prune(0, 0, i64::MAX).unwrap(), 0);
+        assert_eq!(store.prune(0, None, i64::MAX).unwrap(), 0);
+    }
+
+    #[test]
+    fn old_entries_expire_unless_pinned() {
+        let scratch = Scratch::new("expiry");
+        let mut store = Store::open(&scratch.0).unwrap();
+        let kept = store.record(&text("kept", 1)).unwrap().id;
+        store.record(&text("expired", 2)).unwrap();
+        store.record(&text("recent", DAY_MILLIS)).unwrap();
+        store.set_pinned(kept, true).unwrap();
+
+        let now = DAY_MILLIS + 10;
+        assert_eq!(store.prune(0, Some(DAY), now).unwrap(), 1);
+        assert_eq!(matches(&store, "expired"), 0);
+        assert_eq!(count(&store, "SELECT count(*) FROM entries"), 2);
+        // Once unpinned, it is as old as it is.
+        store.set_pinned(kept, false).unwrap();
+        assert_eq!(store.prune(0, Some(DAY), now).unwrap(), 1);
+        assert_eq!(matches(&store, "recent"), 1);
     }
 
     #[test]
@@ -561,7 +586,7 @@ pub mod tests {
         store.record(&picture("one", 1)).unwrap();
         store.record(&picture("two", 2)).unwrap();
         assert_eq!(scratch.blob_count(), 4);
-        store.prune(1, 0, 3).unwrap();
+        store.prune(1, None, 3).unwrap();
         assert_eq!(scratch.blob_count(), 2);
     }
 
@@ -650,7 +675,7 @@ pub mod tests {
         store.set_link_preview(id, entry.hash, &preview).unwrap();
         assert_eq!(matches(&store, "Marvellous"), 1);
         assert_eq!(scratch.blob_count(), 2);
-        store.prune(0, 1, 10 * MILLIS_PER_DAY).unwrap();
+        store.prune(0, Some(DAY), 10 * DAY_MILLIS).unwrap();
         assert_eq!(scratch.blob_count(), 0);
         // A preview arriving for a deleted entry leaves nothing behind.
         store.set_link_preview(id, entry.hash, &preview).unwrap();
@@ -677,7 +702,7 @@ pub mod tests {
         let pixels = b"PIXELS-OF-A-SECRET";
         let open = |encrypt| Store::open_protected(&scratch.0, encrypt, &tpm).unwrap();
 
-        let mut store = open(false);
+        let mut store = open(Some(false));
         let mut entry = picture("Image (1×1)", 1);
         entry.image.as_mut().unwrap().png = pixels.to_vec();
         entry.source = Some(Source {
@@ -693,7 +718,7 @@ pub mod tests {
         assert!(on_disk(&scratch.0, secret.as_bytes()));
 
         for round in 0..2 {
-            let mut store = open(true);
+            let mut store = open(Some(true));
             assert!(store.protector().is_some(), "round {round}");
             let details = store.details(image).unwrap().unwrap();
             assert_eq!(details.image.unwrap().read().unwrap(), pixels);
@@ -707,8 +732,10 @@ pub mod tests {
             }
         }
         assert!(Store::open(&scratch.0).is_err());
+        // Without a choice, it stays as it is.
+        assert!(open(None).protector().is_some());
 
-        let store = open(false);
+        let store = open(Some(false));
         assert_eq!(count(&store, "SELECT count(*) FROM entries"), 3);
         assert_eq!(count(&store, "PRAGMA user_version"), SCHEMA_VERSION);
         let details = store.details(image).unwrap().unwrap();
@@ -729,13 +756,13 @@ pub mod tests {
     fn a_history_without_its_key_is_locked_and_kept() {
         let scratch = Scratch::new("locked");
         let tpm = format!("mocli test locked key {}", std::process::id());
-        let mut store = Store::open_protected(&scratch.0, true, &tpm).unwrap();
+        let mut store = Store::open_protected(&scratch.0, Some(true), &tpm).unwrap();
         store.record(&text("kept", 1)).unwrap();
         drop(store);
         let before = fs::read(scratch.0.join(DATABASE)).unwrap();
         fs::remove_file(scratch.0.join("history.key")).unwrap();
 
-        for encrypt in [true, false] {
+        for encrypt in [Some(true), Some(false), None] {
             let error = Store::open_protected(&scratch.0, encrypt, &tpm)
                 .err()
                 .unwrap();
@@ -744,7 +771,7 @@ pub mod tests {
         assert_eq!(fs::read(scratch.0.join(DATABASE)).unwrap(), before);
 
         set_aside(&scratch.0, 7).unwrap();
-        let store = Store::open_protected(&scratch.0, true, &tpm).unwrap();
+        let store = Store::open_protected(&scratch.0, Some(true), &tpm).unwrap();
         assert_eq!(count(&store, "SELECT count(*) FROM entries"), 0);
         assert_eq!(
             fs::read(scratch.0.join("locked-7").join(DATABASE)).unwrap(),

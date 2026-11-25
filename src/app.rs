@@ -39,7 +39,9 @@ const RESTORE_DELAY: Duration = Duration::from_millis(500);
 
 pub fn run(config: SharedConfig) -> Result<()> {
     let directory = paths::data_dir()?;
-    let encrypt = config.read(|config| config.privacy.encryption.applies(paths::is_portable()));
+    // Never convert the history because of settings that could not be read.
+    let encrypt =
+        (!config.broken_at_start()).then(|| config.read(|config| config.privacy.encrypt_history));
     let store =
         SharedStore::new(open_history(&directory, encrypt).context("failed to open the history")?);
     let (events, incoming) = async_channel::unbounded();
@@ -85,7 +87,7 @@ pub fn run(config: SharedConfig) -> Result<()> {
 }
 
 /// Opens the history, asking what to do if it cannot be unlocked.
-fn open_history(directory: &Path, encrypt: bool) -> Result<Store> {
+fn open_history(directory: &Path, encrypt: Option<bool>) -> Result<Store> {
     let error = match Store::open_protected(directory, encrypt, vault::TPM_KEY) {
         Ok(store) => return Ok(store),
         Err(error) => error,
@@ -163,6 +165,8 @@ impl Controller {
             Placement::Cursor => cursor(),
             Placement::Centered => None,
         };
+        // So the list never offers an entry that has expired.
+        ingest::prune(&self.store, &self.applied.history);
         // Also picks up a system theme that changed since the last time.
         self.load_theme(self.applied.appearance.backdrop == Backdrop::Acrylic, cx);
         self.with_view(cx, |view, window, cx| view.reset(window, cx))?;

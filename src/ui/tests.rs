@@ -286,7 +286,8 @@ fn searching_the_type_dropdown_picks_a_type(cx: &mut TestAppContext) {
 fn pin_and_delete_by_key(cx: &mut TestAppContext) {
     let mut ui = Harness::open(cx, "ui-pin", three());
     ui.press("down down ctrl-p");
-    assert_eq!(ui.titles(), ["alpha", "charlie", "bravo"]);
+    // Pinning does not reorder.
+    assert_eq!(ui.titles(), ["charlie", "bravo", "alpha"]);
     // The pinned entry stays selected.
     assert_eq!(ui.pressing_enter(), Some(ui.ids[0]));
     ui.press("ctrl-p up ctrl-backspace");
@@ -339,14 +340,13 @@ fn enter_can_copy_instead(cx: &mut TestAppContext) {
         }
     ));
     ui.press("down ctrl-j");
-    assert_eq!(ui.titles()[0], "bravo");
+    assert!(ui.store.lock().details(ui.ids[1]).unwrap().unwrap().pinned);
 }
 
 #[gpui_kit::test]
 fn actions_panel_runs_what_is_chosen(cx: &mut TestAppContext) {
     let mut ui = Harness::open(cx, "ui-actions", three());
     ui.action("pin to");
-    assert_eq!(ui.titles()[0], "charlie");
     let pinned = ui.store.lock().details(ui.ids[2]).unwrap().unwrap().pinned;
     assert!(pinned);
 

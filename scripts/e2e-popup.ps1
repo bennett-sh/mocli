@@ -50,8 +50,8 @@ Start-Test
 New-Item -ItemType Directory -Force $Shots | Out-Null
 $form = $null; $other = $null; $stripes = $null
 try {
-    # Unencrypted at first, so the database can be read; encrypted at the end.
-    Start-Mocli "[privacy]`nencryption = `"off`""
+    # Unencrypted, the default, so the database can be read.
+    Start-Mocli
     Check 'app is running and ready' ([bool](Get-Log | Select-String 'ready'))
     $second = Start-Process $Exe -PassThru -WindowStyle Hidden -RedirectStandardError "$root/stderr2.txt"
     Check 'second instance exits' ($second.WaitForExit(5000))
@@ -228,7 +228,7 @@ try {
     }
     $other.Hide(); Stop-Mocli
     Check 'the history starts out readable' ((Test-Plain) -and [bool](Find-OnDisk 'bravo bananas'))
-    Start-Mocli
+    Start-Mocli "[privacy]`nencrypt_history = true"
     Show-Front $form.Handle; $script:target = $form.Handle; Wait-Ui 300
     Check 'the history is encrypted' ((-not (Test-Plain)) -and (Test-Path "$root/data/history.key"))
     Check 'no content is readable on disk' (-not (Find-OnDisk 'bravo bananas') -and -not (Find-OnDisk "$([char]0x89)PNG") -and -not (Find-OnDisk 'SQLite format'))
@@ -239,6 +239,29 @@ try {
     $image = $Forms::GetImage()
     $pixel = if ($image) { $image.GetPixel(5, 5) }
     Check 'an encrypted picture copies back' ($image.Width -eq 480 -and $pixel.B -eq 200) "$($image.Width) $pixel"
+
+    # --- Turning encryption off, then pinning and expiry ---
+    Stop-Mocli; Start-Mocli
+    Show-Front $form.Handle; $script:target = $form.Handle; Wait-Ui 300
+    Check 'turning encryption off converts back' ((Test-Plain) -and -not (Test-Path "$root/data/history.key"))
+    $before = @(Get-Rows).title
+    $got = Use-Popup { Send-Text 'apple'; Send-Chord @(0xA2, 0x50) 500; Save-Shot 'pinned'; Send-Chord @(0x1B); Send-Chord @(0x1B) 400 }
+    Check 'pinning keeps the order' ((@(Get-Rows).title -join '|') -ceq ($before -join '|'))
+    Stop-Mocli
+    $age = @'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("UPDATE entries SET last_copied = last_copied - 7200000"); db.commit()
+'@
+    $age | python - "$root/data/history.db"
+    Start-Mocli "[history]`nkeep_for = `"6h`""
+    Check 'younger entries stay' (@(Get-Rows).Count -eq $before.Count) "$(@(Get-Rows).Count)"
+    Stop-Mocli; Start-Mocli "[history]`nkeep_for = `"1h`""
+    $left = @(@(Get-Rows).title)
+    Check 'expired entries go, pinned ones stay' ($left.Count -eq 1 -and $left[0] -ceq 'alpha apples') "$left"
+    Show-Front $form.Handle; $script:target = $form.Handle; Wait-Ui 300
+    $got = Use-Popup { Save-Shot 'expired'; Send-Chord @(0x0D) }
+    Check 'a pinned old entry still pastes' ($got -ceq 'alpha apples') $got
 
     # GPUI asks a closed window for its bounds once more and logs that it is gone.
     $problems = @(Get-Log | Select-String ' WARN | ERROR ' |

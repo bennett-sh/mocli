@@ -5,16 +5,17 @@ use std::{collections::HashMap, fmt::Display};
 use anyhow::Result;
 use async_channel::Sender;
 use gpui_kit::component::{
-    ActiveTheme as _, Root, Sizable as _,
+    ActiveTheme as _, Root, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    switch::Switch,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::{
     config::{
-        Backdrop, CaptureKind, Config, Encryption, FocusMode, Placement, PopupSize, PrimaryAction,
+        Backdrop, CaptureKind, Config, FocusMode, Placement, PopupSize, PrimaryAction, Retention,
         Sensitive, SharedConfig, ThemeChoice,
     },
     paths,
@@ -23,6 +24,10 @@ use crate::{
 };
 
 const REPOSITORY: &str = "https://github.com/bennett-sh/mocli";
+const DATA_LOSS: &str = "You can lose your whole history, pinned entries included. \
+    Its key is tied to this PC and your Windows account, and is lost if the TPM chip is \
+    cleared or replaced, Windows is reinstalled, an administrator resets your password, \
+    or you move to another PC or account. Nobody can recover the history then.";
 const SHORTCUTS: [&str; 6] = [
     "Win+V",
     "Alt+V",
@@ -413,6 +418,23 @@ fn history(config: &Config) -> SettingPage {
             .description("Contacts a copied link's website to show its title and picture. Addresses that look private or contain secrets are skipped."),
         ]))
         .group(SettingGroup::new().title("Limits").items(vec![
+            choice(
+                "Keep history for",
+                &[
+                    (Retention::Hour, "1 hour"),
+                    (Retention::SixHours, "6 hours"),
+                    (Retention::TwelveHours, "12 hours"),
+                    (Retention::Day, "24 hours"),
+                    (Retention::ThreeDays, "3 days"),
+                    (Retention::Week, "1 week"),
+                    (Retention::Month, "1 month"),
+                    (Retention::ThreeMonths, "3 months"),
+                    (Retention::Forever, "Forever"),
+                ],
+                |c| c.history.keep_for,
+                |c, v| c.history.keep_for = v,
+            )
+            .description("Older entries are deleted. Pin an entry (Ctrl+P) to keep it."),
             limit(
                 "Entries to keep",
                 &[100, 500, 1000, 5000, 10_000, 0],
@@ -421,16 +443,8 @@ fn history(config: &Config) -> SettingPage {
                 |c| c.history.max_entries,
                 |c, v| c.history.max_entries = v,
                 config.history.max_entries,
-            ),
-            limit(
-                "Keep entries for",
-                &[7, 30, 90, 180, 365, 0],
-                "days",
-                "Ever",
-                |c| c.history.max_age_days,
-                |c, v| c.history.max_age_days = v,
-                config.history.max_age_days,
-            ),
+            )
+            .description("The oldest are deleted first. Pinned entries do not count."),
             limit(
                 "Largest image",
                 &[5, 10, 25, 50, 100],
@@ -481,17 +495,45 @@ fn encryption(protector: Option<Protector>) -> SettingItem {
         }
         None => "The history is not encrypted.",
     };
-    choice(
+    SettingItem::new(
         "Encrypt history",
-        &[
-            (Encryption::Auto, "Unless portable"),
-            (Encryption::On, "Always"),
-            (Encryption::Off, "Never"),
-        ],
-        |c| c.privacy.encryption,
-        |c, v| c.privacy.encryption = v,
+        SettingField::<SharedString>::render(|options, _, cx| {
+            Switch::new("encrypt-history")
+                .with_size(options.size())
+                .checked(read(cx, |c| c.privacy.encrypt_history))
+                .on_click(|&on, window, cx| {
+                    if on {
+                        confirm_encryption(window, cx);
+                    } else {
+                        set_encryption(false, cx);
+                    }
+                })
+        }),
     )
-    .description(format!("{now} Changes apply after restarting mocli."))
+    .description(format!(
+        "{now} If its key is lost, an encrypted history cannot be recovered. \
+         Changes apply after restarting mocli."
+    ))
+}
+
+fn set_encryption(on: bool, cx: &mut App) {
+    save(cx, |config| config.privacy.encrypt_history = on);
+    cx.refresh_windows();
+}
+
+/// Turns encryption on only once the risk of losing the history is accepted.
+fn confirm_encryption(window: &mut Window, cx: &mut App) {
+    window.open_alert_dialog(cx, |dialog, _, _| {
+        dialog
+            .confirm()
+            .title("Encrypt the history?")
+            .description(DATA_LOSS)
+            .ok_text("Encrypt")
+            .on_ok(|_, _, cx| {
+                set_encryption(true, cx);
+                true
+            })
+    });
 }
 
 fn privacy(protector: Option<Protector>) -> SettingPage {
@@ -534,7 +576,7 @@ fn shortcuts() -> SettingPage {
         ("Paste as plain text", "Shift+Enter"),
         ("Paste the first nine entries", "Ctrl+1 … Ctrl+9"),
         ("Actions", "Ctrl+K"),
-        ("Pin or unpin", "Ctrl+P"),
+        ("Pin to keep, or unpin", "Ctrl+P"),
         ("Delete", "Ctrl+Backspace or Delete, with an empty search"),
         ("Edit and paste", "Ctrl+E"),
         ("Open", "Ctrl+O"),

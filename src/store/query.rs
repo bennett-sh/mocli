@@ -187,7 +187,7 @@ impl Store {
         Ok(scored.into_iter().map(|(_, entry)| entry).collect())
     }
 
-    /// Pinned entries first, then newest first.
+    /// Newest first.
     fn summaries(
         &self,
         conditions: &[&str],
@@ -203,7 +203,7 @@ impl Store {
 
         let mut query = self.db.prepare_cached(&format!(
             "SELECT id, kind, title, pinned, last_copied, hash FROM entries {filter}
-             ORDER BY pinned DESC, last_copied DESC, id DESC LIMIT ?"
+             ORDER BY last_copied DESC, id DESC LIMIT ?"
         ))?;
         let rows = query.query_map(params_from_iter(values), |row| {
             let Some(kind) = Kind::parse(&row.get::<_, String>(1)?) else {
@@ -376,14 +376,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_lists_pinned_then_newest() {
+    fn empty_query_lists_newest_first_pinned_or_not() {
         let (_scratch, store) = filled("list", &["one", "two", "three"]);
         store
             .db
             .execute("UPDATE entries SET pinned = 1 WHERE title = 'one'", [])
             .unwrap();
         let results = search(&store, "  ");
-        assert_eq!(titles(&results.matches), ["one", "three", "two"]);
+        assert_eq!(titles(&results.matches), ["three", "two", "one"]);
         assert!(results.similar.is_empty());
         assert_eq!(store.search("", &[], 2).unwrap().matches.len(), 2);
     }

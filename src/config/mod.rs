@@ -2,7 +2,7 @@
 
 mod shared;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -41,9 +41,12 @@ show_source_icon = true
 animations = true
 
 [history]
-# Pinned entries are never removed. 0 means no limit.
+# How long an entry stays after it was last copied: "1h", "6h", "12h", "24h",
+# "3d", "1w", "1mo", "3mo" or "forever".
+keep_for = "3mo"
+# How many entries stay, newest first. 0 means no limit. Pinned entries are
+# exempt from both limits.
 max_entries = 1000
-max_age_days = 90
 # Larger images are not saved.
 max_image_mb = 25
 capture = ["text", "image", "files"]
@@ -62,10 +65,11 @@ ignore_apps = ["1Password.exe", "Bitwarden.exe", "KeePass.exe", "KeePassXC.exe"]
 respect_exclusion_formats = true
 # Do not save anything while this is on.
 private_mode = false
-# Encrypts the history with a key held by this PC's TPM chip: "auto" (except in
-# a portable copy, which could then not move to another PC), "on" or "off".
+# Encrypts the history with a key held by this PC's TPM chip. If that key is
+# lost (TPM cleared, Windows reinstalled, password reset by an administrator, or
+# the data moved to another PC or account), the history cannot be recovered.
 # Takes effect after a restart.
-encryption = "auto"
+encrypt_history = false
 # "skip" leaves out card numbers, private keys and access tokens; "store" keeps
 # them.
 sensitive = "skip"
@@ -91,6 +95,30 @@ pub struct Config {
     pub privacy: Privacy,
     pub paste: Paste,
     pub keys: BTreeMap<String, String>,
+}
+
+impl Config {
+    /// Reads a config file, including settings written by older versions.
+    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Older {
+            history: OlderHistory,
+        }
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct OlderHistory {
+            keep_for: Option<Retention>,
+            max_age_days: Option<u32>,
+        }
+
+        let mut config: Self = toml::from_str(text)?;
+        let older: Older = toml::from_str(text)?;
+        if let (None, Some(days)) = (older.history.keep_for, older.history.max_age_days) {
+            config.history.keep_for = Retention::covering(days);
+        }
+        Ok(config)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -208,8 +236,8 @@ impl PopupSize {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct History {
+    pub keep_for: Retention,
     pub max_entries: u32,
-    pub max_age_days: u32,
     pub max_image_mb: u32,
     pub capture: Vec<CaptureKind>,
     pub ocr_images: bool,
@@ -218,11 +246,66 @@ pub struct History {
 impl Default for History {
     fn default() -> Self {
         Self {
+            keep_for: Retention::default(),
             max_entries: 1000,
-            max_age_days: 90,
             max_image_mb: 25,
             capture: vec![CaptureKind::Text, CaptureKind::Image, CaptureKind::Files],
             ocr_images: true,
+        }
+    }
+}
+
+/// How long an entry stays after it was last copied, unless it is pinned.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub enum Retention {
+    #[serde(rename = "1h")]
+    Hour,
+    #[serde(rename = "6h")]
+    SixHours,
+    #[serde(rename = "12h")]
+    TwelveHours,
+    #[serde(rename = "24h")]
+    Day,
+    #[serde(rename = "3d")]
+    ThreeDays,
+    #[serde(rename = "1w")]
+    Week,
+    #[serde(rename = "1mo")]
+    Month,
+    #[default]
+    #[serde(rename = "3mo")]
+    ThreeMonths,
+    #[serde(rename = "forever")]
+    Forever,
+}
+
+impl Retention {
+    /// `None` for no limit. A month is 30 days.
+    pub fn duration(self) -> Option<Duration> {
+        let hours = match self {
+            Self::Hour => 1,
+            Self::SixHours => 6,
+            Self::TwelveHours => 12,
+            Self::Day => 24,
+            Self::ThreeDays => 3 * 24,
+            Self::Week => 7 * 24,
+            Self::Month => 30 * 24,
+            Self::ThreeMonths => 90 * 24,
+            Self::Forever => return None,
+        };
+        Some(Duration::from_secs(hours * 60 * 60))
+    }
+
+    /// The shortest choice that keeps entries at least `days` days, for the
+    /// older `max_age_days` setting, where 0 meant no limit.
+    fn covering(days: u32) -> Self {
+        match days {
+            1 => Self::Day,
+            2..=3 => Self::ThreeDays,
+            4..=7 => Self::Week,
+            8..=30 => Self::Month,
+            31..=90 => Self::ThreeMonths,
+            _ => Self::Forever,
         }
     }
 }
@@ -248,7 +331,7 @@ pub struct Privacy {
     pub respect_exclusion_formats: bool,
     pub private_mode: bool,
     pub sensitive: Sensitive,
-    pub encryption: Encryption,
+    pub encrypt_history: bool,
 }
 
 impl Default for Privacy {
@@ -264,7 +347,7 @@ impl Default for Privacy {
             respect_exclusion_formats: true,
             private_mode: false,
             sensitive: Sensitive::default(),
-            encryption: Encryption::default(),
+            encrypt_history: false,
         }
     }
 }
@@ -275,26 +358,6 @@ pub enum Sensitive {
     #[default]
     Skip,
     Store,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Encryption {
-    /// On, except in a portable copy.
-    #[default]
-    Auto,
-    On,
-    Off,
-}
-
-impl Encryption {
-    pub fn applies(self, portable: bool) -> bool {
-        match self {
-            Self::Auto => !portable,
-            Self::On => true,
-            Self::Off => false,
-        }
-    }
 }
 
 /// The file name of a Windows path.
@@ -383,11 +446,17 @@ mod tests {
     }
 
     #[test]
-    fn encryption_is_automatic_except_when_portable() {
-        assert!(Encryption::Auto.applies(false));
-        assert!(!Encryption::Auto.applies(true));
-        assert!(Encryption::On.applies(true));
-        assert!(!Encryption::Off.applies(false));
+    fn the_older_age_limit_never_gets_shorter() {
+        let keep = |text: &str| Config::parse(text).unwrap().history.keep_for;
+        assert_eq!(keep("[history]\nmax_age_days = 90"), Retention::ThreeMonths);
+        assert_eq!(keep("[history]\nmax_age_days = 14"), Retention::Month);
+        assert_eq!(keep("[history]\nmax_age_days = 365"), Retention::Forever);
+        assert_eq!(keep("[history]\nmax_age_days = 0"), Retention::Forever);
+        assert_eq!(
+            keep("[history]\nmax_age_days = 365\nkeep_for = \"6h\""),
+            Retention::SixHours
+        );
+        assert_eq!(keep(""), Retention::ThreeMonths);
     }
 
     #[test]

@@ -28,15 +28,11 @@ pub struct HistoryDelegate {
     pub filtered: bool,
 }
 
-/// Pinned entries, then matches grouped by age, then loose matches.
+/// Matches grouped by age, then loose matches.
 pub fn sections(results: Results, today: NaiveDate) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
     for entry in results.matches {
-        let title = if entry.pinned {
-            "Pinned"
-        } else {
-            when::Age::of(when::local(entry.last_copied).date(), today).title()
-        };
+        let title = when::Age::of(when::local(entry.last_copied).date(), today).title();
         match sections.last_mut() {
             Some(section) if section.title == title => section.entries.push(entry),
             _ => sections.push(Section {
@@ -245,9 +241,10 @@ mod tests {
         let day = 24 * 60 * 60 * 1000;
         let results = Results {
             matches: vec![
-                entry(1, true, 0),
+                entry(1, false, now),
                 entry(2, false, now),
-                entry(3, false, now),
+                // A pinned entry stays with those of its age.
+                entry(3, true, now - 400 * day),
                 entry(4, false, now - 400 * day),
             ],
             similar: vec![entry(5, false, now)],
@@ -261,10 +258,7 @@ mod tests {
             .iter()
             .map(|section| (section.title, section.entries.len()))
             .collect();
-        assert_eq!(
-            shape,
-            [("Pinned", 1), ("Today", 2), ("Older", 1), ("Similar", 1)]
-        );
+        assert_eq!(shape, [("Today", 2), ("Older", 2), ("Similar", 1)]);
         assert_eq!(delegate.len(), 5);
         for n in 0..5 {
             let (index, id) = delegate.nth(n).unwrap();

@@ -26,11 +26,6 @@ fn portable() -> Option<PathBuf> {
     portable_data(exe.parent()?)
 }
 
-/// Whether this copy keeps its data beside the executable.
-pub fn is_portable() -> bool {
-    portable().is_some()
-}
-
 fn from_env(variable: &str) -> Result<PathBuf> {
     let base = env::var_os(variable).with_context(|| format!("%{variable}% is not set"))?;
     Ok(PathBuf::from(base).join(APP_DIR))

@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use toml_edit::{DocumentMut, Item, Table};
 
-use super::{Config, DEFAULT_FILE};
+use super::{Config, DEFAULT_FILE, Retention};
 
 const POLL: Duration = Duration::from_secs(1);
 /// Tables whose keys are data: saving replaces them whole.
@@ -23,6 +23,7 @@ struct Inner {
     path: PathBuf,
     current: RwLock<Config>,
     changed: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    broken: bool,
 }
 
 #[derive(Clone)]
@@ -30,8 +31,9 @@ pub struct SharedConfig(Arc<Inner>);
 
 impl SharedConfig {
     /// Reads the file, writing the commented default on first start. A broken
-    /// file is reported and left untouched.
+    /// file is reported and left untouched; until it is fixed, nothing expires.
     pub fn load(path: PathBuf) -> Self {
+        let mut broken = false;
         let current = match read(&path) {
             Ok(Some(config)) => config,
             Ok(None) => {
@@ -45,14 +47,26 @@ impl SharedConfig {
             }
             Err(error) => {
                 tracing::warn!(error = format!("{error:#}"), "using the default config");
-                Config::default()
+                broken = true;
+                // The file may ask to keep more than the defaults do.
+                let mut config = Config::default();
+                config.history.keep_for = Retention::Forever;
+                config.history.max_entries = 0;
+                config
             }
         };
         Self(Arc::new(Inner {
             path,
             current: RwLock::new(current),
             changed: OnceLock::new(),
+            broken,
         }))
+    }
+
+    /// Whether the file could not be read at start, so the settings are
+    /// stand-ins.
+    pub fn broken_at_start(&self) -> bool {
+        self.0.broken
     }
 
     pub fn path(&self) -> &Path {
@@ -147,7 +161,7 @@ impl SharedConfig {
 /// `None` if there is no file.
 fn read(path: &Path) -> Result<Option<Config>> {
     match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text)
+        Ok(text) => Config::parse(&text)
             .map(Some)
             .with_context(|| format!("invalid config {}", path.display())),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
@@ -173,6 +187,10 @@ fn merged(existing: &str, config: &Config) -> Result<String> {
         .context("could not parse the config")?;
     let values: DocumentMut = toml::to_string(config)?.parse()?;
     merge(document.as_table_mut(), values.as_table());
+    // Replaced by `keep_for`.
+    if let Some(history) = document.get_mut("history").and_then(Item::as_table_mut) {
+        history.remove("max_age_days");
+    }
     Ok(document.to_string())
 }
 
@@ -237,7 +255,7 @@ mod tests {
         let scratch = Scratch::new("config");
         let path = scratch.0.join("config.toml");
         let shared = SharedConfig::load(path.clone());
-        assert!(path.is_file());
+        assert!(path.is_file() && !shared.broken_at_start());
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         shared.on_change(move || {
@@ -256,5 +274,19 @@ mod tests {
         fs::write(&path, "not toml [").unwrap();
         shared.reload();
         assert_eq!(shared.get().history.max_entries, 5);
+
+        let broken = SharedConfig::load(path);
+        assert!(broken.broken_at_start());
+        assert_eq!(broken.get().history.keep_for, Retention::Forever);
+        assert_eq!(broken.get().history.max_entries, 0);
+    }
+
+    #[test]
+    fn saving_replaces_the_older_age_limit() {
+        let existing = "[history]\nmax_age_days = 365\n";
+        let config = Config::parse(existing).unwrap();
+        let text = merged(existing, &config).unwrap();
+        assert!(!text.contains("max_age_days"), "{text}");
+        assert_eq!(Config::parse(&text).unwrap(), config);
     }
 }
