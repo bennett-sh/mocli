@@ -348,8 +348,7 @@ is only verified with a Win32 text box; the light theme is unchecked.
   focus and hands it back before pasting. It is a manual setting; elevated apps
   are still unsupported.
 - Pasting is skipped, leaving the entry on the clipboard, if focus moved.
-- `scripts/e2e-placement.ps1` passed for the Win32 text box, WPF, centered and
-  cursor cases. Its browser and activate-mode checks have not completed yet.
+- `scripts/e2e-placement.ps1` covers Win32, WPF, Edge and both focus modes.
 
 ## 14. M4–M6 and release status (2026-11-25)
 
@@ -372,10 +371,14 @@ Built as planned, with these differences:
 - **CI:** `dev` builds and packages; `main` releases the files built for the same
   source tree (see README, "Releases").
 
+- **Overlays:** the type dropdown and actions panel show the window's acrylic.
+  GPUI cannot blur inside a window (and has no native popups on Windows), so they
+  are translucent and the content under them fades.
+
 Verification: unit and headless GPUI tests cover capture, storage, previews,
-keys, actions and settings. The end-to-end scripts have **not** run against M4–M6
-(the screen was locked), and the browser and activate-mode parts of
-`e2e-placement.ps1` have never completed.
+keys, actions and settings, and all three end-to-end scripts pass against the
+release build, including WPF, Edge and the "activate" focus mode. GPUI logs
+"Invalid window handle" when the settings window closes; it is harmless.
 
 ## 15. Risks / open questions
 

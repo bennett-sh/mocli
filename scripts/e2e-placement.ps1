@@ -188,6 +188,9 @@ try {
     $box.Clear()
     $field = Use-Box ($area.X + 150) ($area.Y + 80)
     Send-Text 'abc'
+    # Until code sets the selection, WinForms selects everything whenever the
+    # box gets focus back.
+    $box.SelectionStart = 3; $box.SelectionLength = 0
     Open-Popup 900
     Check 'activate: popup takes focus' ([N]::GetForegroundWindow() -eq (Popup)) ([N]::Title([N]::GetForegroundWindow()))
     $r = Bounds
@@ -209,9 +212,13 @@ try {
     Click-At ($field.Right - 20) ($field.Top + $field.Height / 2) 600
     Check 'activate: clicking the app closes the popup' ((Closed) -and [N]::GetForegroundWindow() -eq $form.Handle)
 
-    Open-Popup 900
     $other = New-Form 'mocli e2e other' ($area.X + 60) ($area.Bottom - 160)
-    $other.Show(); Show-Front $other.Handle; Wait-Ui 500
+    $other.Show(); Show-Front $other.Handle
+    $field = Use-Box ($area.X + 150) ($area.Y + 80)
+    Open-Popup 900
+    # Switch to the other window with the mouse, as a person would.
+    $script:target = $other.Handle
+    $at = $other.PointToScreen([System.Drawing.Point]::new(40, 60)); Click-At $at.X $at.Y 800
     Check 'activate: switching away is not undone' ((Closed) -and [N]::GetForegroundWindow() -eq $other.Handle) ([N]::Title([N]::GetForegroundWindow()))
 
     $problems = @(Get-Log | Select-String ' WARN | ERROR ')

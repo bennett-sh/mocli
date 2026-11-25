@@ -289,6 +289,12 @@ unsafe extern "system" fn on_foreground(
     _: u32,
     _: u32,
 ) {
+    // Events arrive late; one for a window that is no longer, or never was, in
+    // front says nothing about the user.
+    // SAFETY: plain query.
+    if window != unsafe { GetForegroundWindow() } {
+        return;
+    }
     // A popup that takes focus closes on losing it to anyone. Otherwise the
     // target announcing itself again changes nothing.
     let target = window.0 as isize == TARGET.load(Ordering::SeqCst);
