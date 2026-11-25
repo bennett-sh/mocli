@@ -24,6 +24,8 @@ use crate::{
     },
 };
 
+/// How much of the popover color covers the acrylic in the popup.
+const POPOVER_OPACITY: f32 = 0.55;
 /// Gives other clipboard tools a moment to let go before the app pastes.
 const PASTE_DELAY: Duration = Duration::from_millis(50);
 /// How long the pasting app has to read the clipboard before the previous
@@ -63,7 +65,7 @@ pub fn run(config: SharedConfig) -> Result<()> {
         .with_quit_mode(QuitMode::Explicit)
         .run(move |cx| {
             gpui_kit::init(cx);
-            apply_theme(initial.appearance.theme, cx);
+            apply_theme(initial.appearance.theme, false, cx);
             popup::bind_keys(&initial.keys, cx);
 
             if let Err(error) = start(config, store, locator, events, incoming, cx) {
@@ -78,11 +80,19 @@ fn takes_focus(config: &Config) -> bool {
     config.general.focus_mode == FocusMode::Activate
 }
 
-fn apply_theme(choice: ThemeChoice, cx: &mut App) {
+/// Loads the theme. With `acrylic`, dropdowns and panels let the window's
+/// backdrop through.
+fn apply_theme(choice: ThemeChoice, acrylic: bool, cx: &mut App) {
+    // Loading starts from the theme's own colors, so opacity never adds up.
     match choice {
         ThemeChoice::System => Theme::sync_system_appearance(None, cx),
         ThemeChoice::Light => Theme::change(ThemeMode::Light, None, cx),
         ThemeChoice::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
+    if acrylic {
+        Theme::update(cx, |theme| {
+            theme.popover = theme.popover.opacity(POPOVER_OPACITY);
+        });
     }
 }
 
@@ -108,6 +118,8 @@ struct Controller {
     tray: Tray,
     settings: SettingsWindow,
     visible: bool,
+    /// Whether the theme is currently set up for the popup's acrylic.
+    acrylic_theme: bool,
 }
 
 impl Controller {
@@ -120,11 +132,8 @@ impl Controller {
             Placement::Cursor => cursor(),
             Placement::Centered => None,
         };
-        let theme = self.applied.appearance.theme;
-        if theme == ThemeChoice::System {
-            // The system may have switched since the last time.
-            cx.update(|cx| apply_theme(theme, cx));
-        }
+        // Also picks up a system theme that changed since the last time.
+        self.load_theme(self.applied.appearance.backdrop == Backdrop::Acrylic, cx);
         self.with_view(cx, |view, window, cx| view.reset(window, cx))?;
         let (width, height) = self.applied.appearance.size.dimensions();
         let rect = self.popup.show(anchor, width, height)?;
@@ -132,6 +141,12 @@ impl Controller {
         self.visible = true;
         tracing::info!("popup shown");
         Ok(())
+    }
+
+    fn load_theme(&mut self, acrylic: bool, cx: &mut AsyncApp) {
+        let theme = self.applied.appearance.theme;
+        cx.update(|cx| apply_theme(theme, acrylic, cx));
+        self.acrylic_theme = acrylic;
     }
 
     /// With `restore`, a popup that holds focus gives it back to the app.
@@ -216,8 +231,11 @@ impl Controller {
             self.hide(true)?;
             self.popup.set_takes_focus(takes_focus(&config))?;
         }
-        if config.appearance.theme != before.appearance.theme {
-            cx.update(|cx| apply_theme(config.appearance.theme, cx));
+        if config.appearance.theme != before.appearance.theme
+            || config.appearance.backdrop != before.appearance.backdrop
+        {
+            let acrylic = self.visible && config.appearance.backdrop == Backdrop::Acrylic;
+            self.load_theme(acrylic, cx);
         }
         let visible = self.visible;
         self.with_view(cx, |view, window, cx| {
@@ -325,6 +343,11 @@ impl Controller {
                 return Ok(false);
             }
         }
+        // Other windows, such as the settings, have nothing behind their
+        // popovers to show.
+        if !self.visible && self.acrylic_theme {
+            self.load_theme(false, cx);
+        }
         Ok(true)
     }
 }
@@ -356,6 +379,7 @@ fn start(
         tray,
         settings,
         visible: false,
+        acrylic_theme: false,
     };
 
     cx.spawn(async move |cx| {

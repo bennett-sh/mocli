@@ -131,6 +131,12 @@ impl Harness<'_> {
         self.cx.run_until_parked();
     }
 
+    /// Whether an overlay is showing the acrylic.
+    pub fn frosted(&mut self) -> bool {
+        self.popup
+            .update_in(self.cx, |popup, window, cx| popup.is_frosted(window, cx))
+    }
+
     /// The titles in the history, top to bottom.
     pub fn titles(&mut self) -> Vec<String> {
         self.store
@@ -268,8 +274,10 @@ fn searching_the_type_dropdown_picks_a_type(cx: &mut TestAppContext) {
         .update_in(ui.cx, |popup, window, cx| popup.focus_filter(window, cx));
     ui.cx.run_until_parked();
     ui.press("enter");
+    assert!(ui.frosted(), "the open dropdown shows the acrylic");
     ui.type_text("link");
     ui.press("enter");
+    assert!(!ui.frosted());
     // Only the link is listed, and the keys reach the search again.
     assert_eq!(ui.pressing_enter(), Some(ui.ids[3]));
 }
@@ -342,8 +350,11 @@ fn actions_panel_runs_what_is_chosen(cx: &mut TestAppContext) {
     let pinned = ui.store.lock().details(ui.ids[2]).unwrap().unwrap().pinned;
     assert!(pinned);
 
+    ui.press("ctrl-k");
+    assert!(ui.frosted(), "the open panel shows the acrylic");
     // Escape closes the panel, and typing searches again.
-    ui.press("ctrl-k escape");
+    ui.press("escape");
+    assert!(!ui.frosted());
     ui.type_text("brav");
     assert_eq!(ui.pressing_enter(), Some(ui.ids[1]));
     ui.press("escape");

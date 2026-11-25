@@ -50,6 +50,8 @@ const PAGE: isize = 8;
 const LIMIT: usize = 5000;
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 const APPEAR: Duration = Duration::from_millis(120);
+/// What is left of the content under an acrylic overlay.
+const FROSTED: f32 = 0.06;
 
 /// The settings the popup draws itself by.
 #[derive(Clone, Copy)]
@@ -428,7 +430,20 @@ impl Popup {
             .child(div().w(px(180.)).child(Select::new(&self.filter)))
     }
 
-    fn body(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// Whether the dropdown or the actions panel should show the window's
+    /// acrylic. GPUI cannot blur what lies under an overlay, so the content
+    /// there fades away instead and the blurred desktop shows through.
+    fn frosted(&self, window: &Window, cx: &App) -> bool {
+        self.look.backdrop == Backdrop::Acrylic
+            && (self.actions.is_some() || self.filter.focus_handle(cx).contains_focused(window, cx))
+    }
+
+    #[cfg(test)]
+    pub fn is_frosted(&self, window: &Window, cx: &App) -> bool {
+        self.frosted(window, cx)
+    }
+
+    fn body(&mut self, frosted: bool, cx: &mut Context<Self>) -> AnyElement {
         if let Some(editor) = &self.editor {
             return div()
                 .key_context("ClipboardEditor")
@@ -465,7 +480,8 @@ impl Popup {
                                 .border_r_1()
                                 .border_color(border)
                         } else {
-                            pane.flex_1()
+                            // The overlays lie over the list itself.
+                            pane.flex_1().when(frosted, |pane| pane.opacity(FROSTED))
                         }
                     })
                     .child(List::new(&self.list)),
@@ -475,6 +491,7 @@ impl Popup {
                     div()
                         .flex_1()
                         .min_w_0()
+                        .when(frosted, |pane| pane.opacity(FROSTED))
                         .when_some(preview, |pane, preview| pane.child(preview)),
                 )
             })
@@ -580,9 +597,10 @@ impl Popup {
 }
 
 impl Render for Popup {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let header = self.header(cx).into_any_element();
-        let body = self.body(cx);
+        let frosted = self.frosted(window, cx);
+        let body = self.body(frosted, cx);
         let footer = self.footer(cx).into_any_element();
         let panel = self
             .actions
