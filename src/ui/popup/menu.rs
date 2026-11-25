@@ -124,6 +124,13 @@ fn entry_items(selected: &Selected, primary: PrimaryAction) -> Vec<Item> {
         Kind::Image => {
             items.push(item("Open image", IconName::ExternalLink, OpenEntry));
             items.push(item("Save image as…", IconName::Download, SaveImage));
+            if details.ocr_text.is_some() {
+                items.push(item(
+                    "Copy text from image",
+                    IconName::ScanText,
+                    CopyImageText,
+                ));
+            }
         }
         Kind::Color => {
             if details.text.as_deref().and_then(Color::parse).is_some() {

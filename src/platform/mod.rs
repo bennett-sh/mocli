@@ -8,6 +8,7 @@ pub mod hook;
 pub mod hotkey;
 pub mod input;
 pub mod keyboard;
+pub mod ocr;
 mod placement;
 pub mod shell;
 pub mod shell_image;
@@ -22,8 +23,26 @@ use std::path::PathBuf;
 use gpui_kit::Keystroke;
 use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
-    UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow},
+    UI::WindowsAndMessaging::{
+        GetCursorPos, GetForegroundWindow, SPI_GETCLIENTAREAANIMATION,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    },
 };
+
+/// Whether Windows is set to animate, which people turn off to reduce motion.
+pub fn animations_enabled() -> bool {
+    let mut enabled = windows::core::BOOL(1);
+    // SAFETY: the setting is a `BOOL`, written to a valid pointer.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some((&raw mut enabled).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || enabled.as_bool()
+}
 
 /// The window that has keyboard focus.
 pub fn foreground() -> HWND {

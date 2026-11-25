@@ -178,6 +178,17 @@ impl Popup {
         }
     }
 
+    pub(super) fn copy_image_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_actions(window, cx);
+        if let Some(text) = self
+            .selected
+            .as_ref()
+            .and_then(|selected| selected.details.ocr_text.clone())
+        {
+            self.send(Event::UseText { text, paste: false });
+        }
+    }
+
     pub(super) fn save_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_actions(window, cx);
         if let Some(selected) = &self.selected

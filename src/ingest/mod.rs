@@ -20,7 +20,7 @@ use self::classify::Primary;
 use crate::{
     capture::{RawImage, Snapshot},
     config::{CaptureKind, History, Sensitive, SharedConfig},
-    platform::shell_image,
+    platform::{ocr, shell_image},
     store::{Format, Image, Kind, NewEntry, SharedStore},
 };
 
@@ -44,6 +44,12 @@ pub fn now_millis() -> i64 {
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
+/// A copied picture waiting to be read.
+struct OcrRequest {
+    id: i64,
+    png: Vec<u8>,
+}
+
 /// A copied link waiting for its preview.
 struct LinkRequest {
     id: i64,
@@ -60,6 +66,7 @@ pub fn spawn(
     changed: impl Fn() + Clone + Send + 'static,
 ) -> Result<()> {
     let links = spawn_link_fetcher(store.clone(), changed.clone())?;
+    let readers = spawn_reader(store.clone(), changed.clone())?;
     thread::Builder::new()
         .name("ingest".into())
         .spawn(move || {
@@ -96,6 +103,16 @@ pub fn spawn(
                             "entry stored"
                         );
                         add_icons(&store, &entry);
+                        if settings.history.ocr_images
+                            && recorded.new
+                            && let Some(image) = &entry.image
+                        {
+                            // The reader lives as long as this thread.
+                            let _ = readers.send(OcrRequest {
+                                id: recorded.id,
+                                png: image.png.clone(),
+                            });
+                        }
                         if settings.previews.fetch_links
                             && recorded.new
                             && let Some(request) = link_request(recorded.id, &entry)
@@ -147,6 +164,48 @@ fn add_icons(store: &SharedStore, entry: &NewEntry) {
             tracing::warn!(error = format!("{error:#}"), "could not save an app icon");
         }
     }
+}
+
+/// Reads the text in pictures one at a time, after they are stored.
+fn spawn_reader(
+    store: SharedStore,
+    changed: impl Fn() + Send + 'static,
+) -> Result<Sender<OcrRequest>> {
+    let (requests, incoming) = mpsc::channel::<OcrRequest>();
+    thread::Builder::new()
+        .name("text-recognition".into())
+        .spawn(move || {
+            ocr::init_thread();
+            let recognizer = ocr::Recognizer::new()
+                .inspect_err(|error| tracing::info!(error = format!("{error:#}"), "no OCR"))
+                .ok();
+            for request in incoming {
+                let Some(recognizer) = &recognizer else {
+                    continue;
+                };
+                let read = image::load_from_memory(&request.png)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|image| recognizer.read(&image.into_rgba8()))
+                    .and_then(|text| {
+                        let found = !text.trim().is_empty();
+                        if found {
+                            store.lock().set_ocr_text(request.id, &text)?;
+                        }
+                        Ok(found)
+                    });
+                // The text is clipboard content: log ids only.
+                match read {
+                    Ok(true) => changed(),
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
+                        id = request.id,
+                        error = format!("{error:#}"),
+                        "could not read a picture"
+                    ),
+                }
+            }
+        })?;
+    Ok(requests)
 }
 
 /// Fetches previews one at a time, so a slow site never delays capturing.

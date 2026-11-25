@@ -64,6 +64,8 @@ pub struct Details {
     /// The icon of a single file.
     pub thumbnail: Option<PathBuf>,
     pub link: LinkDetails,
+    /// Text recognized in an image.
+    pub ocr_text: Option<String>,
 }
 
 /// What a link preview found, if one was fetched.
@@ -234,7 +236,7 @@ impl Store {
             .query_row(
                 "SELECT kind, text, size_bytes, width, height, source_name, source_title,
                         last_copied, copy_count, hash, language, source_exe,
-                        link_title, link_description, pinned
+                        link_title, link_description, pinned, ocr_text
                  FROM entries WHERE id = ?1",
                 [id],
                 |row| {
@@ -259,6 +261,7 @@ impl Store {
                     Ok(Some(Details {
                         kind,
                         pinned: row.get(14)?,
+                        ocr_text: row.get(15)?,
                         text,
                         characters,
                         words,

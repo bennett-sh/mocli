@@ -38,7 +38,7 @@ use super::{
 };
 use crate::{
     config::{Backdrop, Config, PrimaryAction},
-    platform::{Activation, Event},
+    platform::{Activation, Event, animations_enabled},
     store::{Kind, Results, SharedStore},
 };
 
@@ -48,6 +48,7 @@ const PAGE: isize = 8;
 /// Entries loaded at once; the list only draws the visible ones.
 const LIMIT: usize = 5000;
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+const APPEAR: Duration = Duration::from_millis(120);
 
 /// The settings the popup draws itself by.
 #[derive(Clone, Copy)]
@@ -57,6 +58,7 @@ struct Look {
     source_icon: bool,
     backdrop: Backdrop,
     paused: bool,
+    animations: bool,
 }
 
 impl Look {
@@ -67,6 +69,7 @@ impl Look {
             source_icon: config.appearance.show_source_icon,
             backdrop: config.appearance.backdrop,
             paused: config.privacy.private_mode,
+            animations: config.appearance.animations && animations_enabled(),
         }
     }
 }
@@ -84,6 +87,8 @@ pub struct Popup {
     /// Decoded pictures, dropped each time the popup reopens.
     images: Entity<RetainAllImageCache>,
     last_click: Option<(i64, Instant)>,
+    /// Counts openings, so each one animates anew.
+    openings: usize,
     store: SharedStore,
     look: Look,
     events: Sender<Event>,
@@ -144,6 +149,7 @@ impl Popup {
             editor: None,
             images: RetainAllImageCache::new(cx),
             last_click: None,
+            openings: 0,
             store,
             look: Look::of(config),
             events,
@@ -159,6 +165,7 @@ impl Popup {
 
     /// Prepares a fresh view for the next time the popup opens.
     pub fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.openings = self.openings.wrapping_add(1);
         self.last_click = None;
         self.actions = None;
         self.pending = None;
@@ -632,6 +639,7 @@ impl Render for Popup {
             cx
         ));
         let view = on!(view, SaveImage, Self::save_image);
+        let view = on!(view, CopyImageText, Self::copy_image_text);
         let view = on!(view, EditEntry, Self::edit_entry);
         let view = on!(view, PasteEdited, |p, _, cx| p.paste_edited(cx));
         let view = on!(view, CancelEdit, Self::cancel_edit);
@@ -648,23 +656,36 @@ impl Render for Popup {
         ));
         let view = on!(view, QuitApp, |p, w, cx| p.request(Event::Quit, w, cx));
 
-        view.on_action(cx.listener(|this, PasteNth(n): &PasteNth, window, cx| {
-            let target = this.list.read(cx).delegate().nth(*n);
-            if let Some((_, id)) = target {
-                this.select_nth(*n, window, cx);
-                this.send(Event::Activate {
-                    id,
-                    how: this.primary(),
-                });
-            }
-        }))
-        .image_cache(self.images.clone())
-        .size_full()
-        .bg(background)
-        .text_color(theme.foreground)
-        .child(header)
-        .child(body)
-        .child(footer)
-        .children(panel)
+        let animations = self.look.animations;
+        let openings = self.openings;
+        let view = view
+            .on_action(cx.listener(|this, PasteNth(n): &PasteNth, window, cx| {
+                let target = this.list.read(cx).delegate().nth(*n);
+                if let Some((_, id)) = target {
+                    this.select_nth(*n, window, cx);
+                    this.send(Event::Activate {
+                        id,
+                        how: this.primary(),
+                    });
+                }
+            }))
+            .image_cache(self.images.clone())
+            .size_full()
+            .bg(background)
+            .text_color(theme.foreground)
+            .child(header)
+            .child(body)
+            .child(footer)
+            .children(panel);
+
+        if !animations {
+            return view.into_any_element();
+        }
+        view.with_animation(
+            ("appear", openings),
+            Animation::new(APPEAR).with_easing(ease_out_quint()),
+            |view, progress| view.opacity(progress),
+        )
+        .into_any_element()
     }
 }

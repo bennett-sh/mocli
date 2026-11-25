@@ -32,6 +32,7 @@ actions!(
         CopyHex,
         CopyRgb,
         CopyHsl,
+        CopyImageText,
         SaveImage,
         EditEntry,
         PasteEdited,

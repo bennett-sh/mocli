@@ -183,6 +183,15 @@ impl Store {
         self.blobs.write_file(&self.blobs.app_icon(exe), png)
     }
 
+    /// Saves the text recognized in a picture, which makes it searchable.
+    pub fn set_ocr_text(&mut self, id: i64, text: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE entries SET ocr_text = ?2 WHERE id = ?1",
+            params![id, text],
+        )?;
+        Ok(())
+    }
+
     pub fn set_link_preview(
         &mut self,
         id: i64,
@@ -555,6 +564,20 @@ pub mod tests {
             .db
             .execute_batch("INSERT INTO entries_fts (entries_fts) VALUES ('integrity-check')")
             .unwrap();
+    }
+
+    #[test]
+    fn text_in_pictures_is_searchable() {
+        let scratch = Scratch::new("ocr");
+        let mut store = Store::open(&scratch.0).unwrap();
+        let id = store.record(&picture("Image (1×1)", 1)).unwrap().id;
+        store.set_ocr_text(id, "invoice total").unwrap();
+        assert_eq!(matches(&store, "voice"), 1);
+        assert_eq!(
+            store.details(id).unwrap().unwrap().ocr_text.as_deref(),
+            Some("invoice total")
+        );
+        assert_eq!(store.search("to", &[], 5).unwrap().matches.len(), 1);
     }
 
     #[test]

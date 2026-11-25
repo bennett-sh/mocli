@@ -85,6 +85,12 @@ fn rows(selected: &Selected) -> Vec<(&'static str, String)> {
             }
             rows.push(("Format", "PNG".into()));
             rows.push(("Size", human_size(details.size_bytes)));
+            if let Some(text) = &details.ocr_text {
+                rows.push((
+                    "Text",
+                    text.split_whitespace().collect::<Vec<_>>().join(" "),
+                ));
+            }
         }
         Kind::Svg => {
             if let Some(dimensions) = svg_dimensions(text) {
