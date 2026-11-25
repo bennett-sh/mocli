@@ -1,6 +1,6 @@
 //! Reading the history back: lists, search, previews and paste payloads.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::collections::HashSet;
 
 use anyhow::Result;
 use nucleo_matcher::{
@@ -9,7 +9,7 @@ use nucleo_matcher::{
 };
 use rusqlite::{OptionalExtension as _, params, params_from_iter, types::Value};
 
-use super::{Format, Kind, Store, hex};
+use super::{Blob, Format, Kind, Store, hex};
 
 /// Longest text handed to the preview.
 const PREVIEW_CHARS: usize = 10_000;
@@ -28,7 +28,7 @@ pub struct Summary {
     pub pinned: bool,
     pub last_copied: i64,
     /// A picture for the row, if the entry has one.
-    pub thumbnail: Option<PathBuf>,
+    pub thumbnail: Option<Blob>,
 }
 
 #[derive(Debug, Default)]
@@ -56,13 +56,13 @@ pub struct Details {
     pub source_exe: Option<String>,
     pub source_name: Option<String>,
     pub source_title: Option<String>,
-    pub source_icon: Option<PathBuf>,
+    pub source_icon: Option<Blob>,
     pub last_copied: i64,
     pub copy_count: i64,
     /// The stored picture of an image or SVG entry.
-    pub image: Option<PathBuf>,
+    pub image: Option<Blob>,
     /// The icon of a single file.
-    pub thumbnail: Option<PathBuf>,
+    pub thumbnail: Option<Blob>,
     pub link: LinkDetails,
     /// Text recognized in an image.
     pub ocr_text: Option<String>,
@@ -73,8 +73,8 @@ pub struct Details {
 pub struct LinkDetails {
     pub title: Option<String>,
     pub description: Option<String>,
-    pub image: Option<PathBuf>,
-    pub icon: Option<PathBuf>,
+    pub image: Option<Blob>,
+    pub icon: Option<Blob>,
 }
 
 /// What goes back on the clipboard.
@@ -82,12 +82,12 @@ pub struct LinkDetails {
 pub struct Payload {
     pub kind: Kind,
     pub text: Option<String>,
-    pub image: Option<PathBuf>,
+    pub image: Option<Blob>,
     pub formats: Vec<(Format, Vec<u8>)>,
 }
 
-fn existing(path: PathBuf) -> Option<PathBuf> {
-    path.is_file().then_some(path)
+fn existing(blob: Blob) -> Option<Blob> {
+    blob.exists().then_some(blob)
 }
 
 /// A condition limiting results to `kinds`, with its values. `None` for all.
@@ -467,7 +467,7 @@ mod tests {
         store.record(&picture("Image (1×1)", 9)).unwrap();
         let images = store.search("", &[Kind::Image, Kind::Svg], 10).unwrap();
         assert_eq!(titles(&images.matches), ["Image (1×1)"]);
-        assert!(images.matches[0].thumbnail.as_ref().unwrap().is_file());
+        assert!(images.matches[0].thumbnail.as_ref().unwrap().exists());
         let filtered = store.search("pictre", &[Kind::Image], 10).unwrap();
         assert!(filtered.matches.is_empty() && filtered.similar.is_empty());
     }

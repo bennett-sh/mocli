@@ -62,6 +62,10 @@ ignore_apps = ["1Password.exe", "Bitwarden.exe", "KeePass.exe", "KeePassXC.exe"]
 respect_exclusion_formats = true
 # Do not save anything while this is on.
 private_mode = false
+# Encrypts the history with a key held by this PC's TPM chip: "auto" (except in
+# a portable copy, which could then not move to another PC), "on" or "off".
+# Takes effect after a restart.
+encryption = "auto"
 # "skip" leaves out card numbers, private keys and access tokens; "store" keeps
 # them.
 sensitive = "skip"
@@ -244,6 +248,7 @@ pub struct Privacy {
     pub respect_exclusion_formats: bool,
     pub private_mode: bool,
     pub sensitive: Sensitive,
+    pub encryption: Encryption,
 }
 
 impl Default for Privacy {
@@ -259,6 +264,7 @@ impl Default for Privacy {
             respect_exclusion_formats: true,
             private_mode: false,
             sensitive: Sensitive::default(),
+            encryption: Encryption::default(),
         }
     }
 }
@@ -269,6 +275,26 @@ pub enum Sensitive {
     #[default]
     Skip,
     Store,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Encryption {
+    /// On, except in a portable copy.
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl Encryption {
+    pub fn applies(self, portable: bool) -> bool {
+        match self {
+            Self::Auto => !portable,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
 }
 
 /// The file name of a Windows path.
@@ -354,6 +380,14 @@ mod tests {
             "Ctrl+Shift+V"
         );
         assert_eq!(paste.keys_for(r"C:\x\notepad.exe").to_string(), "Ctrl+V");
+    }
+
+    #[test]
+    fn encryption_is_automatic_except_when_portable() {
+        assert!(Encryption::Auto.applies(false));
+        assert!(!Encryption::Auto.applies(true));
+        assert!(Encryption::On.applies(true));
+        assert!(!Encryption::Off.applies(false));
     }
 
     #[test]

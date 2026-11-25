@@ -1,4 +1,9 @@
-use std::{env, fs, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::mpsc,
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result};
 use async_channel::{Receiver, Sender};
@@ -11,12 +16,12 @@ use crate::{
     platform::{
         Activation, Event, OpenTarget, caret, clipboard,
         clipboard_write::{self, Content},
-        cursor, foreground, hook, input, shell, source_app,
+        cursor, dialog, foreground, hook, input, shell, source_app,
         tray::{self, Tray},
         window::PopupWindow,
     },
     reuse,
-    store::{SharedStore, Store},
+    store::{self, Blob, SharedStore, Store, vault},
     ui::{
         assets::Assets,
         popup::{self, Popup},
@@ -33,8 +38,10 @@ const PASTE_DELAY: Duration = Duration::from_millis(50);
 const RESTORE_DELAY: Duration = Duration::from_millis(500);
 
 pub fn run(config: SharedConfig) -> Result<()> {
+    let directory = paths::data_dir()?;
+    let encrypt = config.read(|config| config.privacy.encryption.applies(paths::is_portable()));
     let store =
-        SharedStore::new(Store::open(&paths::data_dir()?).context("failed to open the history")?);
+        SharedStore::new(open_history(&directory, encrypt).context("failed to open the history")?);
     let (events, incoming) = async_channel::unbounded();
 
     let changes = events.clone();
@@ -73,7 +80,31 @@ pub fn run(config: SharedConfig) -> Result<()> {
                 cx.quit();
             }
         });
+    store::remove_opened(&directory);
     Ok(())
+}
+
+/// Opens the history, asking what to do if it cannot be unlocked.
+fn open_history(directory: &Path, encrypt: bool) -> Result<Store> {
+    let error = match Store::open_protected(directory, encrypt, vault::TPM_KEY) {
+        Ok(store) => return Ok(store),
+        Err(error) => error,
+    };
+    if error.downcast_ref::<store::Locked>().is_none() {
+        return Err(error);
+    }
+    tracing::error!(error = format!("{error:#}"), "the history is locked");
+    let start_over = dialog::confirm(
+        "mocli cannot unlock its history. This happens after moving it to another PC \
+         or Windows account, or after the TPM chip was cleared.\n\n\
+         Start a new, empty history? The old one is kept in a folder beside it.\n\n\
+         Choose No to quit and change nothing.",
+    );
+    if !start_over {
+        return Err(error);
+    }
+    store::set_aside(directory, ingest::now_millis())?;
+    Store::open_protected(directory, encrypt, vault::TPM_KEY)
 }
 
 fn takes_focus(config: &Config) -> bool {
@@ -251,8 +282,10 @@ impl Controller {
     }
 
     /// Asks where to save a copy of a stored image.
-    fn save_image(&mut self, source: PathBuf, cx: &mut AsyncApp) -> Result<()> {
+    fn save_image(&mut self, source: Blob, cx: &mut AsyncApp) -> Result<()> {
         self.hide(false)?;
+        // Read now: the entry may be pruned while the dialog is open.
+        let image = source.read()?;
         let downloads = env::var_os("USERPROFILE")
             .map(|home| PathBuf::from(home).join("Downloads"))
             .context("no home directory")?;
@@ -262,7 +295,7 @@ impl Controller {
             let Ok(Ok(Some(destination))) = chosen.await else {
                 return;
             };
-            if let Err(error) = fs::copy(&source, &destination) {
+            if let Err(error) = fs::write(&destination, image) {
                 tracing::error!(%error, "could not save the image");
             }
         })
@@ -319,7 +352,16 @@ impl Controller {
                 self.hide(false)?;
                 cx.update(|cx| cx.reveal_path(&path));
             }
-            Event::SaveImage(path) => self.save_image(path, cx)?,
+            Event::OpenStored(blob) => {
+                self.hide(false)?;
+                // Other programs cannot read the stored file if it is encrypted.
+                let folder = paths::data_dir()?.join(store::OPENED);
+                fs::create_dir_all(&folder)?;
+                let copy = folder.join(blob.file_name());
+                fs::write(&copy, blob.read()?)?;
+                cx.update(|cx| cx.open_with_system(&copy));
+            }
+            Event::SaveImage(blob) => self.save_image(blob, cx)?,
             Event::IgnoreApp(exe) => {
                 let name = config::file_name(&exe).to_owned();
                 self.config.update(|config| {

@@ -133,7 +133,12 @@ impl Popup {
                 "mailto:{}",
                 text.trim_start_matches("mailto:")
             ))),
-            Kind::Image | Kind::Svg => selected.details.image.clone().map(OpenTarget::File),
+            Kind::Image | Kind::Svg => {
+                if let Some(image) = selected.details.image.clone() {
+                    self.send(Event::OpenStored(image));
+                }
+                return;
+            }
             Kind::Files => text.lines().next().map(|p| OpenTarget::File(p.into())),
             Kind::Text | Kind::Code | Kind::Color => None,
         };
@@ -193,9 +198,9 @@ impl Popup {
         self.close_actions(window, cx);
         if let Some(selected) = &self.selected
             && selected.details.kind == Kind::Image
-            && let Some(path) = selected.details.image.clone()
+            && let Some(image) = selected.details.image.clone()
         {
-            self.send(Event::SaveImage(path));
+            self.send(Event::SaveImage(image));
         }
     }
 

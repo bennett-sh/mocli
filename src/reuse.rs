@@ -1,6 +1,6 @@
 //! Turns a stored entry back into clipboard content.
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 
@@ -14,9 +14,8 @@ use crate::{
 pub fn content(payload: Payload, how: Activation) -> Result<Content> {
     let plain = how == Activation::PastePlain;
 
-    if let Some(path) = &payload.image {
-        let png = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
-        return Ok(Content::Image { png });
+    if let Some(image) = &payload.image {
+        return Ok(Content::Image { png: image.read()? });
     }
 
     let text = payload.text.context("the entry has no content")?;
@@ -62,6 +61,7 @@ pub fn restored(snapshot: Snapshot) -> Option<Content> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::Blob;
 
     fn payload(kind: Kind) -> Payload {
         Payload {
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn a_missing_image_file_is_an_error() {
         let mut image = payload(Kind::Image);
-        image.image = Some("does-not-exist.png".into());
+        image.image = Some(Blob::plain("does-not-exist.png".into()));
         assert!(content(image, Activation::Paste).is_err());
     }
 }

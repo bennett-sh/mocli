@@ -1,6 +1,6 @@
 //! One renderer per kind of entry.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -16,7 +16,7 @@ use super::Selected;
 use crate::{
     color::Color,
     platform::Event,
-    ui::{file_facts, popup::Popup},
+    ui::{file_facts, popup::Popup, stored_image},
 };
 
 /// Laying out more than this makes moving through the list sluggish.
@@ -79,10 +79,10 @@ fn highlighted(selected: &Selected, language: &str) -> AnyElement {
 }
 
 /// A picture as large as fits, never enlarged.
-fn framed(path: PathBuf, cx: &App) -> Img {
+fn framed(picture: Img, cx: &App) -> Img {
     // The height must come from the flex layout. Given as a percentage, the
     // aspect ratio wins and the picture gets cut off.
-    img(path)
+    picture
         .flex_1()
         .min_h_0()
         .w_full()
@@ -94,7 +94,13 @@ pub fn picture(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
     v_flex()
         .size_full()
         .p_4()
-        .children(selected.details.image.clone().map(|path| framed(path, cx)))
+        .children(
+            selected
+                .details
+                .image
+                .clone()
+                .map(|image| framed(stored_image::img(image), cx)),
+        )
         .into_any_element()
 }
 
@@ -211,7 +217,7 @@ pub fn link(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
             None => String::new(),
         };
         let media = match &link.icon {
-            Some(icon) => img(icon.clone()).size_12().into_any_element(),
+            Some(icon) => stored_image::img(icon.clone()).size_12().into_any_element(),
             None => large(IconName::Link),
         };
         return card(media, headline, caption, cx).into_any_element();
@@ -220,7 +226,7 @@ pub fn link(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
         .size_full()
         .gap_2()
         .p_4()
-        .child(framed(image, cx))
+        .child(framed(stored_image::img(image), cx))
         .children(
             link.title
                 .clone()
@@ -265,7 +271,7 @@ pub fn files(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
         return v_flex()
             .size_full()
             .p_4()
-            .child(framed(file.path.clone(), cx))
+            .child(framed(img(file.path.clone()), cx))
             .into_any_element();
     }
     let caption = if !file.exists {
@@ -284,7 +290,7 @@ pub fn files(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
     };
     // The shell's own picture is better than a generic icon.
     let media = match &selected.details.thumbnail {
-        Some(thumbnail) => img(thumbnail.clone())
+        Some(thumbnail) => stored_image::img(thumbnail.clone())
             .size_24()
             .object_fit(ObjectFit::Contain)
             .into_any_element(),

@@ -44,13 +44,35 @@ Open them from the tray icon or with `Ctrl+,`, or edit
 
 ## Privacy
 
-- The history is stored **unencrypted** in `%LOCALAPPDATA%\mocli`.
+- The history in `%LOCALAPPDATA%\mocli` is [encrypted](#encryption).
 - Content that apps mark as private is never saved, nor are copies from
   1Password, Bitwarden and KeePass, nor anything that looks like a card number,
   private key or access token. These checks cannot catch every secret; pause
   capture from the tray when in doubt.
 - Nothing leaves your computer. The one exception is link previews, which are
   off unless you switch them on.
+
+## Encryption
+
+The database (SQLCipher, AES-256) and the picture files (XChaCha20-Poly1305) are
+encrypted with a random key. That key is wrapped by an RSA key that is created
+inside the TPM chip and cannot be exported, and the result is sealed to your
+Windows account. There is no password to type. A PC without a usable TPM relies
+on the Windows account alone; the Privacy settings say which is in use.
+
+- It protects the files: a stolen disk, a copied folder, a backup or another
+  user cannot read them.
+- It does **not** protect against software running as you while you are signed
+  in, which can ask for the key just as mocli does.
+- The history cannot move to another PC or Windows account. Clearing the TPM,
+  reinstalling Windows or having an administrator reset your password loses it.
+  mocli then asks whether to start a new history, and keeps the old files.
+- Opening a stored picture in another program leaves a readable copy until mocli
+  next starts or quits. "Save image" writes a readable file where you choose.
+- Turning encryption on converts the existing history. The old unencrypted data
+  is deleted, but may remain recoverable from the disk for a while.
+- A portable copy is not encrypted unless `encryption = "on"`, because it could
+  then only be read on the PC that wrote it.
 
 ## Limitations
 
@@ -60,6 +82,11 @@ Open them from the tray icon or with `Ctrl+,`, or edit
   popup" setting.
 
 ## Develop
+
+Besides Rust and the MSVC build tools, the build needs Perl, to compile OpenSSL
+for SQLCipher: [Strawberry Perl](https://strawberryperl.com) works. If another
+Perl comes first on your `PATH`, set `OPENSSL_SRC_PERL` to Strawberry's
+`perl.exe`.
 
 ```powershell
 cargo run

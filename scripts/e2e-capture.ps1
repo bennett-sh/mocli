@@ -81,6 +81,8 @@ $env:MOCLI_LOG = 'warn,mocli=debug'
 $script:failed = 0
 $app = $null
 try {
+    # The checks read the database, so it stays unencrypted.
+    "[privacy]`nencryption = `"off`"" | Set-Content "$root/appdata/mocli/config.toml"
     Copy-Data (New-Data 'copied before mocli started') $true
     $app = Start-Mocli
 
@@ -170,7 +172,7 @@ try {
     Check 'nothing unexpected was stored' ($rows.Count -eq 10) "$($rows.Count): $($summary -join ' | ')"
 
     Stop-Process -Id $app.Id; $app.WaitForExit()
-    "[privacy]`nignore_apps = [`"PWSH.exe`"]" | Set-Content "$root/appdata/mocli/config.toml"
+    "[privacy]`nencryption = `"off`"`nignore_apps = [`"PWSH.exe`"]" | Set-Content "$root/appdata/mocli/config.toml"
     $app = Start-Mocli
     Copy-Data (New-Data 'from an ignored app')
     $after = Get-Rows

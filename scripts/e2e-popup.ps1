@@ -50,7 +50,8 @@ Start-Test
 New-Item -ItemType Directory -Force $Shots | Out-Null
 $form = $null; $other = $null; $stripes = $null
 try {
-    Start-Mocli
+    # Unencrypted at first, so the database can be read; encrypted at the end.
+    Start-Mocli "[privacy]`nencryption = `"off`""
     Check 'app is running and ready' ([bool](Get-Log | Select-String 'ready'))
     $second = Start-Process $Exe -PassThru -WindowStyle Hidden -RedirectStandardError "$root/stderr2.txt"
     Check 'second instance exits' ($second.WaitForExit(5000))
@@ -212,6 +213,33 @@ try {
     $other = New-Object System.Windows.Forms.Form; $other.TopMost = $true; $other.StartPosition = 'Manual'; $other.Location = '20,200'
     $other.Show(); Show-Front $other.Handle; Wait-Ui 300
     Check 'foreground change closes' (Closed)
+    # --- Encrypting the existing history ---
+    # The app has the database open; its shared memory file is only locks.
+    function Read-Shared([string]$path) {
+        $stream = [System.IO.File]::Open($path, 'Open', 'Read', 'ReadWrite, Delete')
+        try { $copy = [System.IO.MemoryStream]::new(); $stream.CopyTo($copy) } finally { $stream.Dispose() }
+        [System.Text.Encoding]::GetEncoding(28591).GetString($copy.ToArray())
+    }
+    function Test-Plain { (Read-Shared "$root/data/history.db").StartsWith('SQLite format 3') }
+    function Find-OnDisk([string]$needle) {
+        Get-ChildItem "$root/data" -Recurse -File |
+            Where-Object { $_.DirectoryName -notlike '*logs*' -and $_.Name -notlike '*-shm' } |
+            Where-Object { (Read-Shared $_.FullName).Contains($needle) }
+    }
+    $other.Hide(); Stop-Mocli
+    Check 'the history starts out readable' ((Test-Plain) -and [bool](Find-OnDisk 'bravo bananas'))
+    Start-Mocli
+    Show-Front $form.Handle; $script:target = $form.Handle; Wait-Ui 300
+    Check 'the history is encrypted' ((-not (Test-Plain)) -and (Test-Path "$root/data/history.key"))
+    Check 'no content is readable on disk' (-not (Find-OnDisk 'bravo bananas') -and -not (Find-OnDisk "$([char]0x89)PNG") -and -not (Find-OnDisk 'SQLite format'))
+    Check 'the key is protected by the TPM' (-not (Get-Log | Select-String 'no TPM'))
+    $got = Use-Popup { Send-Text 'banana'; Save-Shot 'encrypted-search'; Send-Chord @(0x0D) }
+    Check 'encrypted history searches and pastes' ($got -ceq 'bravo bananas') $got
+    $got = Use-Popup { Send-Chord @(0x09); Send-Chord @(0x09); Wait-Ui 600; Save-Shot 'encrypted-image'; Send-Chord @(0xA2, 0x0D) }
+    $image = $Forms::GetImage()
+    $pixel = if ($image) { $image.GetPixel(5, 5) }
+    Check 'an encrypted picture copies back' ($image.Width -eq 480 -and $pixel.B -eq 200) "$($image.Width) $pixel"
+
     # GPUI asks a closed window for its bounds once more and logs that it is gone.
     $problems = @(Get-Log | Select-String ' WARN | ERROR ' |
         Where-Object { $_ -notmatch 'Invalid window handle' })

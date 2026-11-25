@@ -27,7 +27,7 @@ try {
     if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
     $stage = Join-Path $dist 'portable'
     New-Item -ItemType Directory -Force $stage | Out-Null
-    Copy-Item $exe $stage
+    Copy-Item $exe, (Join-Path $repo 'THIRD-PARTY-NOTICES.txt') $stage
     # Its presence keeps settings and history next to the program.
     Set-Content (Join-Path $stage 'portable') ''
     @"

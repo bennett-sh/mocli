@@ -7,7 +7,11 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use super::Selected;
-use crate::{ingest::code, store::Kind, ui::when};
+use crate::{
+    ingest::code,
+    store::Kind,
+    ui::{stored_image, when},
+};
 
 pub fn table(selected: &Selected) -> DescriptionList {
     let source_icon = selected.details.source_icon.clone();
@@ -23,7 +27,7 @@ pub fn table(selected: &Selected) -> DescriptionList {
                     .justify_end()
                     .gap_2()
                     .text_sm()
-                    .children(icon.map(|path| img(path).size_4().flex_shrink_0()))
+                    .children(icon.map(|icon| stored_image::img(icon).size_4().flex_shrink_0()))
                     .child(div().min_w_0().truncate().child(value))
                     .into_any_element(),
             )

@@ -1,4 +1,5 @@
 # Link the C runtime into the executable, so the portable build runs on a
 # Windows without the Visual C++ redistributable.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+# OpenSSL is built without the debug files its objects mention (LNK4099).
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/IGNORE:4099"]

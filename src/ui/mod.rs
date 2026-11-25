@@ -4,6 +4,7 @@ mod history_list;
 pub mod popup;
 mod preview;
 pub mod settings;
+mod stored_image;
 #[cfg(test)]
 mod tests;
 mod type_filter;

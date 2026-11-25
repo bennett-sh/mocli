@@ -156,7 +156,7 @@ fn add_icons(store: &SharedStore, entry: &NewEntry) {
     }
     if let Some(source) = &entry.source {
         // Bound first: rendering must not hold the lock.
-        let missing = !store.lock().app_icon(&source.exe).is_file();
+        let missing = !store.lock().has_app_icon(&source.exe);
         if missing
             && let Some(icon) = render(&source.exe, APP_ICON_EDGE)
             && let Err(error) = store.lock().set_app_icon(&source.exe, &icon)

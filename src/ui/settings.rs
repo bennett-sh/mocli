@@ -14,12 +14,12 @@ use gpui_kit::*;
 
 use crate::{
     config::{
-        Backdrop, CaptureKind, Config, FocusMode, Placement, PopupSize, PrimaryAction, Sensitive,
-        SharedConfig, ThemeChoice,
+        Backdrop, CaptureKind, Config, Encryption, FocusMode, Placement, PopupSize, PrimaryAction,
+        Sensitive, SharedConfig, ThemeChoice,
     },
     paths,
     platform::{Event, autostart, hotkey::Hotkey, window},
-    store::SharedStore,
+    store::{SharedStore, vault::Protector},
 };
 
 const REPOSITORY: &str = "https://github.com/bennett-sh/mocli";
@@ -473,8 +473,30 @@ fn clear_history() -> SettingItem {
     )
 }
 
-fn privacy() -> SettingPage {
+fn encryption(protector: Option<Protector>) -> SettingItem {
+    let now = match protector {
+        Some(Protector::Tpm) => "The history is encrypted with a key held by this PC's TPM chip.",
+        Some(Protector::Account) => {
+            "The history is encrypted with your Windows account's key; no TPM was usable."
+        }
+        None => "The history is not encrypted.",
+    };
+    choice(
+        "Encrypt history",
+        &[
+            (Encryption::Auto, "Unless portable"),
+            (Encryption::On, "Always"),
+            (Encryption::Off, "Never"),
+        ],
+        |c| c.privacy.encryption,
+        |c, v| c.privacy.encryption = v,
+    )
+    .description(format!("{now} Changes apply after restarting mocli."))
+}
+
+fn privacy(protector: Option<Protector>) -> SettingPage {
     SettingPage::new("Privacy").group(SettingGroup::new().items(vec![
+        encryption(protector),
         switch(
             "Pause capture",
             |c| c.privacy.private_mode,
@@ -587,12 +609,12 @@ fn about() -> SettingPage {
     )
 }
 
-fn pages(config: &Config) -> Vec<SettingPage> {
+fn pages(config: &Config, protector: Option<Protector>) -> Vec<SettingPage> {
     vec![
         general(config),
         appearance(),
         history(config),
-        privacy(),
+        privacy(protector),
         shortcuts(),
         advanced(),
         about(),
@@ -603,12 +625,14 @@ pub struct SettingsView;
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let config = cx.global::<SettingsContext>().config.get();
+        let context = cx.global::<SettingsContext>();
+        let config = context.config.get();
+        let protector = context.store.lock().protector();
         div()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(Settings::new("settings").pages(pages(&config)))
+            .child(Settings::new("settings").pages(pages(&config, protector)))
     }
 }
 

@@ -4,12 +4,14 @@ pub mod autostart;
 pub mod caret;
 pub mod clipboard;
 pub mod clipboard_write;
+pub mod dialog;
 pub mod hook;
 pub mod hotkey;
 pub mod input;
 pub mod keyboard;
 pub mod ocr;
 mod placement;
+pub mod protect;
 pub mod shell;
 pub mod shell_image;
 pub mod single_instance;
@@ -28,6 +30,8 @@ use windows::Win32::{
         SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     },
 };
+
+use crate::store::Blob;
 
 /// Whether Windows is set to animate, which people turn off to reduce motion.
 pub fn animations_enabled() -> bool {
@@ -88,8 +92,10 @@ pub enum Event {
     Open(OpenTarget),
     /// Show a file in Explorer.
     Reveal(PathBuf),
+    /// Open a stored picture with its default program.
+    OpenStored(Blob),
     /// Ask where to keep a copy of a stored image.
-    SaveImage(PathBuf),
+    SaveImage(Blob),
     /// Stop saving what a program copies.
     IgnoreApp(String),
     TogglePrivate,

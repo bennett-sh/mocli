@@ -100,7 +100,10 @@ The schema lives in `src/store/schema.sql` (versioned through `user_version`):
 - `formats`: HTML and RTF payloads, restored when pasting.
 - `entries_fts`: trigram FTS5 index over title, text and source name.
 - Images are `blobs/<hash>.png` plus `<hash>.thumb.png`, next to `history.db` in
-  `%LOCALAPPDATA%\mocli` (`MOCLI_DATA_DIR` overrides it). Nothing is encrypted.
+  `%LOCALAPPDATA%\mocli` (`MOCLI_DATA_DIR` overrides it).
+  The database (SQLCipher) and blobs (XChaCha20-Poly1305) are encrypted with a
+  random key, wrapped by a non-exportable TPM key and sealed to the Windows
+  account (`store/vault.rs`; added after 0.1.0).
 
 Columns for link metadata (M4) and OCR text (M6) arrive with migrations.
 
