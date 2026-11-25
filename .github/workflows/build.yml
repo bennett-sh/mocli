@@ -1,0 +1,119 @@
+# Checks, builds and packages mocli. Shared by the dev and main workflows.
+#
+# The packaged files are uploaded under the hash of the source tree, so a commit
+# that reaches main after being built on dev is released without compiling again.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      reuse:
+        description: Use the files of an earlier build of the same source, if any.
+        type: boolean
+        default: false
+    outputs:
+      artifact:
+        description: Name of the artifact holding the packaged files.
+        value: ${{ jobs.locate.outputs.artifact }}
+      run-id:
+        description: The workflow run that holds the artifact.
+        value: ${{ jobs.locate.outputs.run-id || github.run_id }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  locate:
+    name: Look for an earlier build
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.find.outputs.artifact }}
+      run-id: ${{ steps.find.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Look for an earlier build
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE: ${{ inputs.reuse }}
+        run: |
+          artifact="mocli-$(git rev-parse 'HEAD^{tree}')"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          [ "$REUSE" = "true" ] || exit 0
+
+          # When dev and main are pushed together, wait for the dev build
+          # instead of compiling the same commit twice.
+          for run in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow dev.yml \
+              --commit "$GITHUB_SHA" --event push --json databaseId,status \
+              --jq '.[] | select(.status != "completed") | .databaseId'); do
+            echo "Waiting for the dev build $run"
+            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30 > /dev/null || true
+          done
+
+          # Only builds of pushes to this repository's own branches are trusted:
+          # a pull request from a fork can upload an artifact with any name.
+          candidates=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact&per_page=100" \
+            --jq '.artifacts[]
+              | select(.expired | not)
+              | .workflow_run
+              | select(.head_repository_id == .repository_id)
+              | select(.head_branch == "dev" or .head_branch == "main")
+              | .id')
+          for run in $candidates; do
+            event=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .event)
+            if [ "$event" = "push" ] || [ "$event" = "workflow_dispatch" ]; then
+              echo "Reusing the build of run $run"
+              echo "run-id=$run" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No earlier build; compiling."
+
+  build:
+    name: Lint, test and package
+    needs: locate
+    if: needs.locate.outputs.run-id == ''
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Test the release scripts
+        run: python -m unittest discover --start-directory .github/scripts
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+          }
+
+      - name: Build and package
+        run: ./scripts/package.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.locate.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90

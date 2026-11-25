@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release at a time, and never cancelled halfway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      reuse: true
+
+  release:
+    name: Tag and release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Tags and history are needed for the changelog.
+          fetch-depth: 0
+
+      - name: Plan the release
+        id: plan
+        run: |
+          python .github/scripts/release.py \
+            --repository "$GITHUB_REPOSITORY" --notes "$RUNNER_TEMP/notes.md"
+
+      - uses: actions/download-artifact@v8
+        if: steps.plan.outputs.publish == 'true'
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          run-id: ${{ needs.build.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: dist
+
+      - name: Tag and publish
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          PRERELEASE: ${{ steps.plan.outputs.prerelease }}
+        run: |
+          # The files must belong to the version being released.
+          version="${TAG#v}"
+          ls -l dist
+          test -f "dist/mocli-$version-x64-setup.exe"
+          test -f "dist/mocli-$version-x64-portable.zip"
+          (cd dist && sha256sum --check SHA256SUMS.txt)
+
+          # Moved onto this commit if the version did not change.
+          git tag --force "$TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$TAG"
+
+          flags=(--title "mocli $version" --notes-file "$RUNNER_TEMP/notes.md" --prerelease="$PRERELEASE")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" "${flags[@]}"
+          else
+            gh release create "$TAG" dist/* --verify-tag "${flags[@]}"
+          fi
