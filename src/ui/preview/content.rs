@@ -16,7 +16,7 @@ use super::Selected;
 use crate::{
     color::Color,
     platform::Event,
-    ui::{file_facts, popup::Popup, stored_image},
+    ui::{file_facts, popup::Popup, stored_image, swatch},
 };
 
 /// Laying out more than this makes moving through the list sluggish.
@@ -165,13 +165,12 @@ pub fn color(selected: &Selected, cx: &mut Context<Popup>) -> AnyElement {
 
     scrolling(selected)
         .child(
-            div()
+            swatch(color)
                 .h(px(96.))
                 .w_full()
                 .rounded(radius)
                 .border_1()
-                .border_color(border)
-                .bg(rgba(color.to_rgba_u32())),
+                .border_color(border),
         )
         .child(v_flex().pt_2().children(rows))
         .child(div().pt_1().text_xs().text_color(muted).child(format!(

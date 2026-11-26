@@ -9,7 +9,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{kind_icon, stored_image, when};
+use super::{kind_icon, stored_image, swatch, when};
 use crate::{
     color::Color,
     store::{Kind, Results, Summary},
@@ -121,10 +121,10 @@ impl ListDelegate for HistoryDelegate {
             .rounded(theme.radius)
             .bg(theme.muted)
             .overflow_hidden();
-        let swatch = (entry.kind == Kind::Color)
+        let color = (entry.kind == Kind::Color)
             .then(|| Color::parse(&entry.title))
             .flatten();
-        let tile = match (&entry.thumbnail, swatch) {
+        let tile = match (&entry.thumbnail, color) {
             (Some(thumbnail), _) => {
                 // Photos fill the tile; icons must not be cropped.
                 let fit = match entry.kind {
@@ -137,7 +137,7 @@ impl ListDelegate for HistoryDelegate {
                         .object_fit(fit),
                 )
             }
-            (None, Some(color)) => tile.bg(rgba(color.to_rgba_u32())),
+            (None, Some(color)) => tile.child(swatch(color).size_full()),
             (None, None) => tile.child(Icon::new(kind_icon(entry.kind)).small()),
         };
 

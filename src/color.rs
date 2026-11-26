@@ -33,30 +33,63 @@ impl Color {
         let (&[first, second, third], rest) = parts.split_first_chunk::<3>()?;
         let alpha = match rest {
             [] => 1.0,
-            [alpha] => alpha.scaled(1.0).clamp(0.0, 1.0),
+            [alpha] => alpha.alpha(),
             _ => return None,
         };
 
         match function {
-            "rgb" | "rgba" => Some(Self {
-                red: byte(first.scaled(255.0)),
-                green: byte(second.scaled(255.0)),
-                blue: byte(third.scaled(255.0)),
-                alpha,
-            }),
-            "hsl" | "hsla" => Some(from_hsl(
-                first.degrees(),
-                second.scaled(100.0) / 100.0,
-                third.scaled(100.0) / 100.0,
-                alpha,
-            )),
-            "oklch" => Some(from_oklch(
-                first.scaled(1.0),
-                // 100% chroma is defined as 0.4.
-                second.scaled(0.4),
-                third.degrees(),
-                alpha,
-            )),
+            "rgb" | "rgba" => {
+                // `rgb(1.0, 0.5, 0)` is written in 0 to 1, as shaders and
+                // design tools do; `rgb(1, 0, 0)` is still 0 to 255.
+                let unit = if Component::fractions(&[first, second, third]) {
+                    255.0
+                } else {
+                    1.0
+                };
+                let channel = |c: Component| match c.unit {
+                    Unit::Percent => byte(c.value / 100.0 * 255.0),
+                    _ => byte(c.value * unit),
+                };
+                Some(Self {
+                    red: channel(first),
+                    green: channel(second),
+                    blue: channel(third),
+                    alpha,
+                })
+            }
+            "hsl" | "hsla" => {
+                // Saturation and lightness as `0.5` rather than `50%`.
+                let unit = if Component::fractions(&[second, third]) {
+                    1.0
+                } else {
+                    100.0
+                };
+                let share = |c: Component| match c.unit {
+                    Unit::Percent => c.value / 100.0,
+                    _ => c.value / unit,
+                };
+                Some(from_hsl(
+                    first.degrees(),
+                    share(second),
+                    share(third),
+                    alpha,
+                ))
+            }
+            "oklch" => {
+                // Lightness is 0 to 1, or 0 to 100 when written above 1.
+                let lightness = match first.unit {
+                    Unit::Percent => first.value / 100.0,
+                    _ if first.value > 1.0 => first.value / 100.0,
+                    _ => first.value,
+                };
+                Some(from_oklch(
+                    lightness.clamp(0.0, 1.0),
+                    // 100% chroma is defined as 0.4.
+                    second.scaled(0.4).max(0.0),
+                    third.degrees(),
+                    alpha,
+                ))
+            }
             _ => None,
         }
     }
@@ -167,6 +200,8 @@ impl Color {
 struct Component {
     value: f32,
     unit: Unit,
+    /// Written with a decimal point, like `0.5` or `1.0`.
+    fractional: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -184,6 +219,7 @@ impl Component {
             return Some(Self {
                 value: 0.0,
                 unit: Unit::None,
+                fractional: false,
             });
         }
         let (number, unit) = [
@@ -196,7 +232,33 @@ impl Component {
         .find_map(|(suffix, unit)| Some((text.strip_suffix(suffix)?, unit)))
         .unwrap_or((text, Unit::None));
         let value: f32 = number.parse().ok()?;
-        value.is_finite().then_some(Self { value, unit })
+        let fractional = number.contains('.');
+        value.is_finite().then_some(Self {
+            value,
+            unit,
+            fractional,
+        })
+    }
+
+    /// Whether unitless components are fractions of 1 rather than of 255 or
+    /// 100: all of them at most 1, and at least one written with a decimal
+    /// point.
+    fn fractions(components: &[Self]) -> bool {
+        let unitless: Vec<_> = components
+            .iter()
+            .filter(|c| matches!(c.unit, Unit::None))
+            .collect();
+        unitless.iter().all(|c| c.value <= 1.0) && unitless.iter().any(|c| c.fractional)
+    }
+
+    /// An alpha: `50%`, `0.5`, or a byte like `128` as in `rgba(255 0 0 128)`.
+    fn alpha(self) -> f32 {
+        let alpha = match self.unit {
+            Unit::Percent => self.value / 100.0,
+            _ if self.value > 1.0 && !self.fractional => self.value / 255.0,
+            _ => self.value,
+        };
+        alpha.clamp(0.0, 1.0)
     }
 
     /// The value, with percentages taken of `whole`.
@@ -320,6 +382,31 @@ mod tests {
             ("hsl(0.5turn 100% 50%)", "#00ffff"),
             ("oklch(1 0 0)", "#ffffff"),
             ("oklch(0.62796 0.25768 29.234)", "#ff0000"),
+            ("oklch(62.796% 0.25768 29.234)", "#ff0000"),
+            ("oklch(62.796 0.25768 29.234)", "#ff0000"),
+            ("oklch(0.62796 0.25768 29.234 / 0.5)", "#ff000080"),
+            // 0 to 1 floats.
+            ("rgb(1.0, 0.478, 0.102)", "#ff7a1a"),
+            ("rgba(1.0, 0, 0, 0.5)", "#ff000080"),
+            ("rgb(0.5 0.5 0.5)", "#808080"),
+            // Integers stay 0 to 255, even when small.
+            ("rgb(1, 0, 0)", "#010000"),
+            ("rgb(1, 1, 1)", "#010101"),
+            // Percentages, also mixed with numbers.
+            ("rgb(100%, 50%, 0%)", "#ff8000"),
+            ("rgb(100% 128 0)", "#ff8000"),
+            // Alpha as a fraction, a percentage or a byte.
+            ("rgba(255, 0, 0, .5)", "#ff000080"),
+            ("rgba(255, 0, 0, 50%)", "#ff000080"),
+            ("rgba(255, 0, 0, 128)", "#ff000080"),
+            ("rgba(255, 0, 0, 1)", "#ff0000"),
+            ("rgba(255, 0, 0, 0)", "#ff000000"),
+            ("rgb(255 0 0 / 0.25)", "#ff000040"),
+            // HSL saturation and lightness as numbers or fractions.
+            ("hsl(120 100 25)", "#008000"),
+            ("hsl(120, 1.0, 0.25)", "#008000"),
+            ("hsla(0, 100%, 50%, 0.5)", "#ff000080"),
+            ("hsl(0 100% 50% / 128)", "#ff000080"),
         ] {
             assert_eq!(hex(text).as_deref(), Some(expected), "{text}");
         }
