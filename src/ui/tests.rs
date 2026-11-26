@@ -401,6 +401,36 @@ fn actions_panel_shows_and_takes_shortcuts(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn entries_can_be_named(cx: &mut TestAppContext) {
+    let mut ui = Harness::open(cx, "ui-rename", three());
+    // Escape leaves the name as it was.
+    ui.press("f2");
+    ui.type_text("nope");
+    ui.press("escape");
+    assert_eq!(ui.titles(), ["charlie", "bravo", "alpha"]);
+    assert!(ui.events.try_recv().is_err(), "Escape only left the name");
+
+    ui.press("down f2");
+    ui.type_text("Second one");
+    ui.press("enter");
+    assert_eq!(ui.titles(), ["charlie", "Second one", "alpha"]);
+    // The entry stays selected, and the search is back.
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[1]));
+    ui.type_text("brav");
+    assert_eq!(ui.pressing_enter(), Some(ui.ids[1]));
+    ui.press("escape");
+
+    // Renaming again starts from the name; the panel removes it.
+    ui.press("down");
+    ui.action("rename");
+    ui.type_text("Renamed");
+    ui.press("enter");
+    assert_eq!(ui.titles(), ["charlie", "Renamed", "alpha"]);
+    ui.action("remove name");
+    assert_eq!(ui.titles(), ["charlie", "bravo", "alpha"]);
+}
+
+#[gpui_kit::test]
 fn deleting_many_asks_first(cx: &mut TestAppContext) {
     let mut ui = Harness::open(cx, "ui-confirm", three());
     ui.action("delete all");

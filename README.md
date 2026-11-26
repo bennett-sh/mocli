@@ -29,6 +29,7 @@ asks before the first start.
 | `Ctrl+P` | Pin to keep, or unpin |
 | `Ctrl+Backspace` / `Del` | Delete (with an empty search) |
 | `Ctrl+E` | Edit, then paste |
+| `F2` | Name the entry (search finds the name and the content) |
 | `Ctrl+O` | Open the link, file or image |
 | `Tab` / `Shift+Tab` | Change the type filter |
 | `Ctrl+,` | Settings |

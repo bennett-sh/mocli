@@ -25,7 +25,7 @@ use self::{
 };
 use crate::{capture::Source, ingest::link::Preview};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const DATABASE: &str = "history.db";
 /// Where copies of stored pictures are put for other programs to open.
 pub const OPENED: &str = "opened";
@@ -292,6 +292,16 @@ impl Store {
         })
     }
 
+    /// Names an entry, or with a blank name, shows its content again.
+    pub fn set_name(&mut self, id: i64, name: &str) -> Result<()> {
+        let name = name.trim();
+        self.db.execute(
+            "UPDATE entries SET name = ?2 WHERE id = ?1",
+            params![id, (!name.is_empty()).then_some(name)],
+        )?;
+        Ok(())
+    }
+
     pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<()> {
         self.db.execute(
             "UPDATE entries SET pinned = ?2 WHERE id = ?1",
@@ -416,8 +426,11 @@ fn migrate(db: &mut Connection) -> Result<()> {
         version <= SCHEMA_VERSION,
         "the history was written by a newer version of mocli"
     );
-    const STEPS: [&str; SCHEMA_VERSION as usize] =
-        [include_str!("schema.sql"), include_str!("migrate2.sql")];
+    const STEPS: [&str; SCHEMA_VERSION as usize] = [
+        include_str!("schema.sql"),
+        include_str!("migrate2.sql"),
+        include_str!("migrate3.sql"),
+    ];
     for (step, sql) in STEPS.iter().enumerate().skip(version.max(0) as usize) {
         let transaction = db.transaction()?;
         transaction.execute_batch(sql)?;

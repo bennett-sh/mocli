@@ -38,6 +38,7 @@ icon_assets!(
         Play,
         Power,
         Route,
+        TextCursorInput,
         ScanText,
         Settings,
         Trash,

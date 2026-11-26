@@ -36,13 +36,17 @@ pub fn table(selected: &Selected) -> DescriptionList {
 
 fn rows(selected: &Selected) -> Vec<(&'static str, String)> {
     let details = &selected.details;
-    let mut rows = vec![(
+    let mut rows = Vec::new();
+    if let Some(name) = &details.name {
+        rows.push(("Name", name.clone()));
+    }
+    rows.push((
         "Source",
         details
             .source_name
             .clone()
             .unwrap_or_else(|| "Unknown".into()),
-    )];
+    ));
     if let Some(title) = &details.source_title {
         rows.push(("Window", title.clone()));
     }

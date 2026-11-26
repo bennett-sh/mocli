@@ -24,7 +24,10 @@ const MIN_SCORE_PER_CHAR: u32 = 19;
 pub struct Summary {
     pub id: i64,
     pub kind: Kind,
+    /// The name the user gave the entry, or else its title.
     pub title: String,
+    /// The title from the content, when the entry has a name.
+    pub content_title: Option<String>,
     pub pinned: bool,
     pub last_copied: i64,
     /// A picture for the row, if the entry has one.
@@ -66,6 +69,8 @@ pub struct Details {
     pub link: LinkDetails,
     /// Text recognized in an image.
     pub ocr_text: Option<String>,
+    /// The name the user gave the entry.
+    pub name: Option<String>,
 }
 
 /// What a link preview found, if one was fetched.
@@ -130,13 +135,13 @@ impl Store {
             conditions.push(
                 r"(title LIKE ? ESCAPE '\' OR text LIKE ? ESCAPE '\'
                    OR source_name LIKE ? ESCAPE '\' OR link_title LIKE ? ESCAPE '\'
-                   OR ocr_text LIKE ? ESCAPE '\')",
+                   OR ocr_text LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\')",
             );
             let pattern = word
                 .replace('\\', r"\\")
                 .replace('%', r"\%")
                 .replace('_', r"\_");
-            values.extend(std::iter::repeat_n(Value::from(format!("%{pattern}%")), 5));
+            values.extend(std::iter::repeat_n(Value::from(format!("%{pattern}%")), 6));
         }
 
         let matches = self.summaries(&conditions, values, limit)?;
@@ -176,8 +181,13 @@ impl Store {
             .into_iter()
             .filter(|entry| !excluded.contains(&entry.id))
             .filter_map(|entry| {
-                let title = Utf32Str::new(&entry.title, &mut buffer);
-                let score = pattern.score(title, &mut matcher)?;
+                // Both the name and the content's own title count.
+                let score = std::iter::once(&entry.title)
+                    .chain(&entry.content_title)
+                    .filter_map(|title| {
+                        pattern.score(Utf32Str::new(title, &mut buffer), &mut matcher)
+                    })
+                    .max()?;
                 (score >= typed * MIN_SCORE_PER_CHAR).then_some((score, entry))
             })
             .collect();
@@ -202,7 +212,7 @@ impl Store {
         values.push(Value::from(i64::try_from(limit).unwrap_or(i64::MAX)));
 
         let mut query = self.db.prepare_cached(&format!(
-            "SELECT id, kind, title, pinned, last_copied, hash FROM entries {filter}
+            "SELECT id, kind, title, pinned, last_copied, hash, name FROM entries {filter}
              ORDER BY last_copied DESC, id DESC LIMIT ?"
         ))?;
         let rows = query.query_map(params_from_iter(values), |row| {
@@ -210,10 +220,17 @@ impl Store {
                 return Ok(None);
             };
             let hash = hex(row.get(5)?);
+            let title: String = row.get(2)?;
+            let name: Option<String> = row.get(6)?;
+            let (title, content_title) = match name {
+                Some(name) => (name, Some(title)),
+                None => (title, None),
+            };
             Ok(Some(Summary {
                 id: row.get(0)?,
                 kind,
-                title: row.get(2)?,
+                title,
+                content_title,
                 pinned: row.get(3)?,
                 last_copied: row.get(4)?,
                 thumbnail: match kind {
@@ -236,7 +253,7 @@ impl Store {
             .query_row(
                 "SELECT kind, text, size_bytes, width, height, source_name, source_title,
                         last_copied, copy_count, hash, language, source_exe,
-                        link_title, link_description, pinned, ocr_text
+                        link_title, link_description, pinned, ocr_text, name
                  FROM entries WHERE id = ?1",
                 [id],
                 |row| {
@@ -262,6 +279,7 @@ impl Store {
                         kind,
                         pinned: row.get(14)?,
                         ocr_text: row.get(15)?,
+                        name: row.get(16)?,
                         text,
                         characters,
                         words,
@@ -386,6 +404,37 @@ mod tests {
         assert_eq!(titles(&results.matches), ["three", "two", "one"]);
         assert!(results.similar.is_empty());
         assert_eq!(store.search("", &[], 2).unwrap().matches.len(), 2);
+    }
+
+    #[test]
+    fn names_show_instead_and_both_are_found() {
+        let (_scratch, mut store) = filled("names", &["5f4dcc3b5aa765d6", "other"]);
+        let id = search(&store, "5f4d").matches[0].id;
+        store.set_name(id, "  Hash of my username ").unwrap();
+
+        let found = |store: &Store, query| titles(&search(store, query).matches).join("|");
+        assert_eq!(found(&store, "username"), "Hash of my username");
+        assert_eq!(found(&store, "of"), "Hash of my username");
+        assert_eq!(found(&store, "5f4dcc"), "Hash of my username");
+        let entry = &search(&store, "hash").matches[0];
+        assert_eq!(entry.content_title.as_deref(), Some("5f4dcc3b5aa765d6"));
+        let details = store.details(id).unwrap().unwrap();
+        assert_eq!(details.name.as_deref(), Some("Hash of my username"));
+        // Loose matches look at the name too.
+        assert_eq!(
+            titles(&search(&store, "hshusrnm").similar),
+            ["Hash of my username"]
+        );
+
+        // Copying the same content again keeps the name.
+        store.record(&text("5f4dcc3b5aa765d6", 10)).unwrap();
+        assert_eq!(found(&store, "5f4dcc"), "Hash of my username");
+
+        // A blank name brings the content back.
+        store.set_name(id, " ").unwrap();
+        assert_eq!(found(&store, "username"), "");
+        assert_eq!(found(&store, "5f4dcc"), "5f4dcc3b5aa765d6");
+        assert!(search(&store, "5f4dcc").matches[0].content_title.is_none());
     }
 
     #[test]

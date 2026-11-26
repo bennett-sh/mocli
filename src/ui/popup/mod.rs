@@ -89,6 +89,8 @@ pub struct Popup {
     pending: Option<Pending>,
     /// The text being edited before pasting.
     editor: Option<Entity<TextareaState>>,
+    /// The name being given to the selected entry, in place of the search.
+    renaming: Option<Entity<InputState>>,
     /// Decoded pictures, dropped each time the popup reopens.
     images: Entity<RetainAllImageCache>,
     last_click: Option<(i64, Instant)>,
@@ -153,6 +155,7 @@ impl Popup {
             actions: None,
             pending: None,
             editor: None,
+            renaming: None,
             images: RetainAllImageCache::new(cx),
             last_click: None,
             openings: 0,
@@ -176,6 +179,7 @@ impl Popup {
         self.actions = None;
         self.pending = None;
         self.editor = None;
+        self.renaming = None;
         self.images
             .update(cx, |images, cx| images.clear(window, cx));
         self.search
@@ -344,6 +348,7 @@ impl Popup {
             return;
         };
         self.close_actions(window, cx);
+        self.cancel_rename(window, cx);
         self.focus_search(window, cx);
         let double = self
             .last_click
@@ -422,13 +427,23 @@ impl Popup {
             .p_3()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                div()
+            .child(match &self.renaming {
+                Some(name) => h_flex()
+                    .key_context("ClipboardRename")
+                    .flex_1()
+                    .gap_2()
+                    .text_lg()
+                    .child(
+                        Icon::new(IconName::TextCursorInput)
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(Input::new(name).appearance(false)),
+                None => h_flex()
                     .key_context(SEARCH_CONTEXT)
                     .flex_1()
                     .text_lg()
                     .child(Input::new(&self.search).appearance(false)),
-            )
+            })
             .child(div().w(px(180.)).child(Select::new(&self.filter)))
     }
 
@@ -510,32 +525,42 @@ impl Popup {
             )
         };
         let buttons = h_flex().gap_2();
-        let buttons = if self.editor.is_some() {
-            buttons
-                .child(
-                    hint("paste-edited", "Paste edited", "ctrl-enter")
-                        .on_click(cx.listener(|this, _, _, cx| this.paste_edited(cx))),
-                )
-                .child(
-                    hint("cancel-edit", "Cancel", "escape")
-                        .on_click(cx.listener(|this, _, window, cx| this.cancel_edit(window, cx))),
-                )
-        } else {
-            let primary = match self.look.primary {
-                PrimaryAction::Paste => "Paste",
-                PrimaryAction::Copy => "Copy",
-            };
-            buttons
-                .child(
-                    hint("primary", primary, "enter")
-                        .on_click(cx.listener(|this, _, _, _| this.activate(this.primary()))),
-                )
-                .child(
-                    hint("actions", "Actions", "ctrl-k").on_click(
+        let buttons =
+            if self.renaming.is_some() {
+                buttons
+                    .child(
+                        hint("save-name", "Save name", "enter").on_click(
+                            cx.listener(|this, _, window, cx| this.save_name(window, cx)),
+                        ),
+                    )
+                    .child(hint("cancel-rename", "Cancel", "escape").on_click(
+                        cx.listener(|this, _, window, cx| this.cancel_rename(window, cx)),
+                    ))
+            } else if self.editor.is_some() {
+                buttons
+                    .child(
+                        hint("paste-edited", "Paste edited", "ctrl-enter")
+                            .on_click(cx.listener(|this, _, _, cx| this.paste_edited(cx))),
+                    )
+                    .child(
+                        hint("cancel-edit", "Cancel", "escape").on_click(
+                            cx.listener(|this, _, window, cx| this.cancel_edit(window, cx)),
+                        ),
+                    )
+            } else {
+                let primary = match self.look.primary {
+                    PrimaryAction::Paste => "Paste",
+                    PrimaryAction::Copy => "Copy",
+                };
+                buttons
+                    .child(
+                        hint("primary", primary, "enter")
+                            .on_click(cx.listener(|this, _, _, _| this.activate(this.primary()))),
+                    )
+                    .child(hint("actions", "Actions", "ctrl-k").on_click(
                         cx.listener(|this, _, window, cx| this.toggle_actions(window, cx)),
-                    ),
-                )
-        };
+                    ))
+            };
 
         let theme = cx.theme();
         h_flex()
@@ -670,6 +695,10 @@ impl Render for Popup {
         let view = on!(view, SaveImage, Self::save_image);
         let view = on!(view, CopyImageText, Self::copy_image_text);
         let view = on!(view, EditEntry, Self::edit_entry);
+        let view = on!(view, RenameEntry, Self::rename_entry);
+        let view = on!(view, ClearName, Self::clear_name);
+        let view = on!(view, SaveName, Self::save_name);
+        let view = on!(view, CancelRename, Self::cancel_rename);
         let view = on!(view, PasteEdited, |p, _, cx| p.paste_edited(cx));
         let view = on!(view, CancelEdit, Self::cancel_edit);
         let view = on!(view, IgnoreApp, Self::ignore_app);

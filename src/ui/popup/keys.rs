@@ -35,6 +35,10 @@ actions!(
         CopyImageText,
         SaveImage,
         EditEntry,
+        RenameEntry,
+        ClearName,
+        SaveName,
+        CancelRename,
         PasteEdited,
         CancelEdit,
         IgnoreApp,
@@ -55,6 +59,7 @@ const SEARCH: &str = "ClipboardSearch > Input";
 const POPUP: &str = "ClipboardPopup";
 const PANEL: &str = "ClipboardActions > Input";
 const EDITOR: &str = "ClipboardEditor > Input";
+const RENAME: &str = "ClipboardRename > Input";
 
 /// Binds the popup's keys. `overrides` maps action names from the config to
 /// additional keystrokes.
@@ -81,6 +86,7 @@ pub fn bind_keys(overrides: &BTreeMap<String, String>, cx: &mut App) {
         KeyBinding::new("delete", DeleteEntry, search),
         KeyBinding::new("ctrl-o", OpenEntry, search),
         KeyBinding::new("ctrl-e", EditEntry, search),
+        KeyBinding::new("f2", RenameEntry, search),
         KeyBinding::new("ctrl-,", OpenSettings, search),
         // Wherever focus is within the popup.
         KeyBinding::new("escape", Dismiss, Some(POPUP)),
@@ -97,9 +103,12 @@ pub fn bind_keys(overrides: &BTreeMap<String, String>, cx: &mut App) {
         KeyBinding::new("delete", DeleteEntry, Some(PANEL)),
         KeyBinding::new("ctrl-o", OpenEntry, Some(PANEL)),
         KeyBinding::new("ctrl-e", EditEntry, Some(PANEL)),
+        KeyBinding::new("f2", RenameEntry, Some(PANEL)),
         KeyBinding::new("ctrl-,", OpenSettings, Some(PANEL)),
         KeyBinding::new("ctrl-enter", PasteEdited, Some(EDITOR)),
         KeyBinding::new("escape", CancelEdit, Some(EDITOR)),
+        KeyBinding::new("enter", SaveName, Some(RENAME)),
+        KeyBinding::new("escape", CancelRename, Some(RENAME)),
     ]);
     let slots = [
         "ctrl-1", "ctrl-2", "ctrl-3", "ctrl-4", "ctrl-5", "ctrl-6", "ctrl-7", "ctrl-8", "ctrl-9",
@@ -125,16 +134,22 @@ pub fn bind_keys(overrides: &BTreeMap<String, String>, cx: &mut App) {
         };
         cx.bind_keys([search_binding]);
         // Keys without a modifier would take typing or Enter away from the
-        // panel's own search.
+        // panel's own search. Function keys type nothing.
         let modified = keys
             .split_whitespace()
             .next()
             .and_then(|stroke| Keystroke::parse(stroke).ok())
-            .is_some_and(|stroke| stroke.modifiers.modified());
+            .is_some_and(|stroke| stroke.modifiers.modified() || is_function_key(&stroke.key));
         if modified && name != "actions" {
             cx.bind_keys(binding(name, keys, PANEL));
         }
     }
+}
+
+fn is_function_key(key: &str) -> bool {
+    key.strip_prefix('f')
+        .and_then(|number| number.parse::<u8>().ok())
+        .is_some_and(|number| (1..=24).contains(&number))
 }
 
 /// The binding for an action named in the config, in the given key context.
@@ -146,6 +161,7 @@ fn binding(name: &str, keys: &'static str, context: &'static str) -> Option<KeyB
         "copy" => KeyBinding::new(keys, Copy, context),
         "actions" => KeyBinding::new(keys, ToggleActions, context),
         "pin" => KeyBinding::new(keys, TogglePin, context),
+        "rename" => KeyBinding::new(keys, RenameEntry, context),
         "delete" => KeyBinding::new(keys, DeleteEntry, context),
         "settings" => KeyBinding::new(keys, OpenSettings, context),
         "next_type" => KeyBinding::new(keys, NextType, context),

@@ -2,7 +2,10 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::component::{command::CommandState, input::TextareaState};
+use gpui_kit::component::{
+    command::CommandState,
+    input::{InputState, TextareaState},
+};
 use gpui_kit::*;
 
 use super::{Popup, menu::Pending};
@@ -16,7 +19,7 @@ impl Popup {
     pub(super) fn toggle_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.actions.is_some() {
             self.close_actions(window, cx);
-        } else if self.editor.is_none() {
+        } else if self.editor.is_none() && self.renaming.is_none() {
             self.open_actions(window, cx);
         }
     }
@@ -216,6 +219,58 @@ impl Popup {
         editor.update(cx, |editor, cx| editor.focus(window, cx));
         self.editor = Some(editor);
         cx.notify();
+    }
+
+    /// Swaps the search for a field naming the selected entry.
+    pub(super) fn rename_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_actions(window, cx);
+        if self.editor.is_some() {
+            return;
+        }
+        let Some(selected) = &self.selected else {
+            return;
+        };
+        let current = selected.details.name.clone().unwrap_or_default();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Name this entry, or leave empty to show its content")
+                .default_value(current)
+        });
+        input.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
+        self.renaming = Some(input);
+        cx.notify();
+    }
+
+    pub(super) fn save_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.renaming.take() else {
+            return;
+        };
+        let name = input.read(cx).value().to_string();
+        self.store_name(&name, window, cx);
+    }
+
+    pub(super) fn clear_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_actions(window, cx);
+        self.store_name("", window, cx);
+    }
+
+    fn store_name(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected_id() {
+            let result = self.store.lock().set_name(id, name);
+            report("rename", result);
+        }
+        self.focus_search(window, cx);
+        self.refresh(true, window, cx);
+    }
+
+    pub(super) fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.renaming.take().is_some() {
+            self.focus_search(window, cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn paste_edited(&mut self, cx: &mut Context<Self>) {

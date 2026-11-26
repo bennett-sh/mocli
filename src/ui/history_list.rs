@@ -122,7 +122,7 @@ impl ListDelegate for HistoryDelegate {
             .bg(theme.muted)
             .overflow_hidden();
         let color = (entry.kind == Kind::Color)
-            .then(|| Color::parse(&entry.title))
+            .then(|| Color::parse(entry.content_title.as_ref().unwrap_or(&entry.title)))
             .flatten();
         let tile = match (&entry.thumbnail, color) {
             (Some(thumbnail), _) => {
@@ -153,12 +153,30 @@ impl ListDelegate for HistoryDelegate {
                         .gap_3()
                         .child(tile)
                         .child(
-                            div()
+                            h_flex()
                                 .flex_1()
                                 .min_w_0()
-                                .truncate()
+                                .gap_2()
                                 .text_sm()
-                                .child(entry.title.clone()),
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .max_w(relative(0.7))
+                                        .truncate()
+                                        .child(entry.title.clone()),
+                                )
+                                // A named entry still hints at what it holds.
+                                .when_some(entry.content_title.clone(), |row, content| {
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child(content),
+                                    )
+                                }),
                         )
                         .when(entry.pinned, |row| {
                             row.child(Icon::new(IconName::Pin).xsmall())
@@ -229,6 +247,7 @@ mod tests {
             id,
             kind: Kind::Text,
             title: id.to_string(),
+            content_title: None,
             pinned,
             last_copied,
             thumbnail: None,

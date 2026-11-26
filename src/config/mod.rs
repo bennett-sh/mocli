@@ -81,7 +81,8 @@ sensitive = "skip"
 "putty.exe" = "Shift+Insert"
 
 # Other popup shortcuts, for example `delete = "ctrl-d"`. Actions: paste,
-# paste_plain, copy, actions, pin, delete, settings, next_type, previous_type.
+# paste_plain, copy, actions, pin, rename, delete, settings, next_type,
+# previous_type.
 [keys]
 "#;
 

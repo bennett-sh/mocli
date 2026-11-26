@@ -109,6 +109,10 @@ fn entry_items(selected: &Selected, primary: PrimaryAction) -> Vec<Item> {
     } else {
         item("Pin to keep", IconName::Pin, TogglePin)
     });
+    items.push(item("Rename…", IconName::TextCursorInput, RenameEntry));
+    if details.name.is_some() {
+        items.push(item("Remove name", IconName::X, ClearName));
+    }
     if textual && details.kind != Kind::Files {
         items.push(item("Edit and paste", IconName::Pencil, EditEntry));
     }
