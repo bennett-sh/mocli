@@ -42,7 +42,7 @@ asks before the first start.
 </tr>
 <tr>
 <td valign="top"><b>Knows what you copied.</b> Text, code, links, email addresses, colors, images, SVG and files each get their own icon and preview, and show the program they came from.</td>
-<td valign="top"><b>Images included.</b> Pictures are shown at full size next to their dimensions, format and size, and the text in them is searchable.</td>
+<td valign="top"><b>Images included.</b> Pictures are shown large, next to their dimensions, format and size, and the text in them is searchable.</td>
 </tr>
 <tr>
 <td><img src="assets/preview-link.png" alt="Preview of a copied link"></td>
