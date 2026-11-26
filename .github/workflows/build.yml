@@ -1,0 +1,49 @@
+name: Build
+
+# Reusable: builds the release binary, the portable zip and the installer, and uploads
+# them as workflow artifacts. Called by ci.yml and release.yml.
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Version from [package] in Cargo.toml
+        value: ${{ jobs.build.outputs.version }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: release build, zip, installer
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        run: |
+          $v = ./scripts/version.ps1
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Release build, portable zip and installer
+        run: ./scripts/package.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mocli-portable
+          path: dist/mocli-*-portable.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mocli-installer
+          path: dist/mocli-*-setup.exe
+          compression-level: 0
+          if-no-files-found: error

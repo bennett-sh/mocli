@@ -1,0 +1,80 @@
+[package]
+name = "mocli"
+version = "1.0.0"
+edition = "2024"
+description = "A clipboard history for Windows"
+repository = "https://github.com/bennett-sh/mocli"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+
+[build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+blake3 = "1"
+chacha20poly1305 = "0.11.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+getrandom = "0.4.3"
+gpui-kit = { version = "0.11.0", features = ["syntect"] }
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "gif",
+    "ico",
+    "jpeg",
+    "png",
+    "webp",
+] }
+nucleo-matcher = "0.3"
+raw-window-handle = "0.6"
+# SQLCipher, with OpenSSL built from source (needs Perl; see the readme).
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+toml_edit = "0.25"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tray-icon = { version = "0.27", default-features = false }
+ureq = "3"
+url = "2"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dev-dependencies]
+# The version gpui-kit uses, with its headless test platform. Enabling
+# `test-support` through gpui-kit does not resolve with its current backends.
+gpui = { package = "gpui-pre", version = "=0.3.14", features = ["test-support"] }
