@@ -74,6 +74,10 @@ encrypt_history = false
 # them.
 sensitive = "skip"
 
+[updates]
+# Once a day, ask GitHub whether a newer version is out. Nothing else is sent.
+check = true
+
 # Programs that paste with other keys than Ctrl+V.
 [paste.per_app]
 "WindowsTerminal.exe" = "Ctrl+Shift+V"
@@ -94,6 +98,7 @@ pub struct Config {
     pub history: History,
     pub previews: Previews,
     pub privacy: Privacy,
+    pub updates: Updates,
     pub paste: Paste,
     pub keys: BTreeMap<String, String>,
 }
@@ -373,6 +378,18 @@ impl Privacy {
         self.ignore_apps
             .iter()
             .any(|ignored| ignored.eq_ignore_ascii_case(name))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct Updates {
+    pub check: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self { check: true }
     }
 }
 

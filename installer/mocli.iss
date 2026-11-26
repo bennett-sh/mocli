@@ -1,4 +1,4 @@
-; Inno Setup 6 script. Build it with scripts/package.ps1, which passes the
+﻿; Inno Setup 6 script. Build it with scripts/package.ps1, which passes the
 ; version and the executable.
 
 #ifndef AppVersion
@@ -11,6 +11,7 @@
 #define AppName "mocli"
 #define AppUrl "https://github.com/bennett-sh/mocli"
 #define RunKey "Software\Microsoft\Windows\CurrentVersion\Run"
+#define AppKey "Software\mocli"
 
 [Setup]
 ; Identifies the app across versions: never change it.
@@ -44,8 +45,14 @@ CloseApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
+[CustomMessages]
+english.CheckForUpdates=Check for updates once a day
+german.CheckForUpdates=Einmal täglich nach Updates suchen
+
 [Tasks]
 Name: "startup"; Description: "{cm:AutoStartProgram,{#AppName}}"
+; Only asked before the first start: afterwards the app's settings hold the choice.
+Name: "updates"; Description: "{cm:CheckForUpdates}"; Check: IsFirstSetup
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Files]
@@ -61,6 +68,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\mocli.exe"; Tasks: desktopico
 Root: HKCU; Subkey: "{#RunKey}"; ValueType: string; ValueName: "mocli"; ValueData: """{app}\mocli.exe"""; Tasks: startup
 ; Removed on uninstall, however it was created.
 Root: HKCU; Subkey: "{#RunKey}"; ValueType: none; ValueName: "mocli"; Flags: uninsdeletevalue dontcreatekey
+; Read and removed by the app at its next start, which saves it in its config.
+Root: HKCU; Subkey: "{#AppKey}"; ValueType: dword; ValueName: "CheckForUpdates"; ValueData: 0; Tasks: not updates; Check: IsFirstSetup
+Root: HKCU; Subkey: "{#AppKey}"; ValueType: none; Flags: uninsdeletekey dontcreatekey
 
 [Run]
 Filename: "{app}\mocli.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
@@ -69,6 +79,12 @@ Filename: "{app}\mocli.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM mocli.exe"; Flags: runhidden; RunOnceId: "StopMocli"
 
 [Code]
+// Before the app's first start there are no settings to keep.
+function IsFirstSetup: Boolean;
+begin
+  Result := not FileExists(ExpandConstant('{userappdata}\{#AppName}\config.toml'));
+end;
+
 // Replacing a running executable fails, and the history database survives being
 // stopped at any moment.
 function PrepareToInstall(var NeedsRestart: Boolean): String;

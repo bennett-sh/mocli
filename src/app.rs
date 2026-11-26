@@ -16,7 +16,7 @@ use crate::{
     platform::{
         Activation, Event, OpenTarget, caret, clipboard,
         clipboard_write::{self, Content},
-        cursor, dialog, foreground, hook, input, shell, source_app,
+        cursor, dialog, foreground, hook, input, installer, shell, source_app,
         tray::{self, Tray},
         window::PopupWindow,
     },
@@ -27,6 +27,7 @@ use crate::{
         popup::{self, Popup},
         settings::SettingsWindow,
     },
+    update,
 };
 
 /// How much of the popover color covers the acrylic in the popup.
@@ -52,6 +53,16 @@ pub fn run(config: SharedConfig) -> Result<()> {
         let _ = changes.try_send(Event::ConfigChanged);
     });
     config.watch()?;
+    // Never rewrite a file that could not be read.
+    if !config.broken_at_start()
+        && let Some(check) = installer::take_update_choice()
+    {
+        config.update(|config| config.updates.check = check)?;
+    }
+    let changes = events.clone();
+    update::spawn(config.clone(), move || {
+        let _ = changes.try_send(Event::UpdateChecked);
+    })?;
 
     let (snapshots, copies) = mpsc::channel();
     let changes = events.clone();
@@ -259,6 +270,7 @@ impl Controller {
         let before = std::mem::replace(&mut self.applied, config.clone());
         hook::configure(config.general.hotkey, !takes_focus(&config));
         self.tray.set_paused(config.privacy.private_mode);
+        self.show_update();
 
         if takes_focus(&config) != takes_focus(&before)
             || config.appearance.size != before.appearance.size
@@ -283,6 +295,12 @@ impl Controller {
         self.settings.refresh(cx);
         tracing::debug!("settings applied");
         Ok(())
+    }
+
+    /// Offers a newer version in the tray, unless checking is off.
+    fn show_update(&mut self) {
+        let available = update::available().filter(|_| self.applied.updates.check);
+        self.tray.set_update(available.as_deref());
     }
 
     /// Asks where to save a copy of a stored image.
@@ -383,6 +401,10 @@ impl Controller {
                 self.settings.open(cx)?;
             }
             Event::OpenConfig => shell::edit_text_file(self.config.path())?,
+            Event::UpdateChecked => {
+                self.show_update();
+                self.settings.refresh(cx);
+            }
             Event::Quit => {
                 tracing::info!("quitting");
                 cx.update(|cx| cx.quit());

@@ -11,6 +11,7 @@ mod platform;
 mod reuse;
 mod store;
 mod ui;
+mod update;
 
 fn main() -> anyhow::Result<()> {
     let _log_guard = logging::init()?;

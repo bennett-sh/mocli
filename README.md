@@ -62,8 +62,11 @@ is deleted within a minute.
   1Password, Bitwarden and KeePass, nor anything that looks like a card number,
   private key or access token. These checks cannot catch every secret; pause
   capture from the tray when in doubt.
-- Nothing leaves your computer. The one exception is link previews, which are
-  off unless you switch them on.
+- Nothing leaves your computer. The exceptions are link previews, which are
+  off unless you switch them on, and a daily look at GitHub for a newer
+  release, which you can turn off in the installer or under About in the
+  settings (`[updates] check = false`). An update is only offered in the tray
+  menu and the settings; nothing is downloaded or installed by itself.
 
 ## Encryption
 

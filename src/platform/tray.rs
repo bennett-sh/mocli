@@ -7,23 +7,63 @@ use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-use super::Event;
+use super::{Event, OpenTarget};
+use crate::update;
 
 const SHOW: &str = "show";
 const PAUSE: &str = "pause";
 const SETTINGS: &str = "settings";
 const CONFIG: &str = "config";
 const QUIT: &str = "quit";
+const UPDATE: &str = "update";
+const TOOLTIP: &str = "mocli: clipboard history";
 
 /// The tray icon, which disappears when this is dropped.
 pub struct Tray {
-    _icon: TrayIcon,
+    icon: TrayIcon,
+    menu: Menu,
     pause: CheckMenuItem,
+    /// Shown at the top of the menu while a newer version is out.
+    update: MenuItem,
+    update_separator: PredefinedMenuItem,
+    /// The version `update` offers.
+    offered: Option<String>,
 }
 
 impl Tray {
     pub fn set_paused(&self, paused: bool) {
         self.pause.set_checked(paused);
+    }
+
+    /// Offers `version` in the menu, or nothing with `None`.
+    pub fn set_update(&mut self, version: Option<&str>) {
+        if self.offered.as_deref() == version {
+            return;
+        }
+        let result = (|| -> Result<()> {
+            if self.offered.is_some() {
+                self.menu.remove(&self.update)?;
+                self.menu.remove(&self.update_separator)?;
+            }
+            if let Some(version) = version {
+                self.update.set_text(format!("Download mocli {version}…"));
+                self.menu
+                    .insert_items(&[&self.update, &self.update_separator], 0)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not show the update in the tray"
+            );
+        }
+        let tooltip = match version {
+            Some(version) => format!("{TOOLTIP} (mocli {version} is available)"),
+            None => TOOLTIP.to_owned(),
+        };
+        let _ = self.icon.set_tooltip(Some(tooltip));
+        self.offered = version.map(str::to_owned);
     }
 }
 
@@ -49,6 +89,7 @@ pub fn create(events: Sender<Event>) -> Result<Tray> {
             SETTINGS => Event::OpenSettings,
             CONFIG => Event::OpenConfig,
             QUIT => Event::Quit,
+            UPDATE => Event::Open(OpenTarget::Address(update::RELEASES_PAGE.into())),
             _ => return,
         };
         let _ = menu_events.try_send(event);
@@ -66,12 +107,19 @@ pub fn create(events: Sender<Event>) -> Result<Tray> {
     }));
 
     let icon = TrayIconBuilder::new()
-        .with_tooltip("mocli: clipboard history")
-        .with_menu(Box::new(menu))
+        .with_tooltip(TOOLTIP)
+        .with_menu(Box::new(menu.clone()))
         .with_menu_on_left_click(false)
         .with_icon(icon()?)
         .build()?;
-    Ok(Tray { _icon: icon, pause })
+    Ok(Tray {
+        icon,
+        menu,
+        pause,
+        update: MenuItem::with_id(UPDATE, "", true, None),
+        update_separator: PredefinedMenuItem::separator(),
+        offered: None,
+    })
 }
 
 /// A small clipboard, drawn in code like the application icon.

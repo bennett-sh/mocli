@@ -8,6 +8,7 @@ pub mod dialog;
 pub mod hook;
 pub mod hotkey;
 pub mod input;
+pub mod installer;
 pub mod keyboard;
 pub mod ocr;
 mod placement;
@@ -102,6 +103,8 @@ pub enum Event {
     ConfigChanged,
     OpenSettings,
     OpenConfig,
+    /// The update check started or finished.
+    UpdateChecked,
     Quit,
 }
 

@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt::Display};
 use anyhow::Result;
 use async_channel::Sender;
 use gpui_kit::component::{
-    ActiveTheme as _, Root, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Root, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     switch::Switch,
@@ -21,6 +21,7 @@ use crate::{
     paths,
     platform::{Event, autostart, hotkey::Hotkey, window},
     store::{SharedStore, vault::Protector},
+    update::{self, Status},
 };
 
 const REPOSITORY: &str = "https://github.com/bennett-sh/mocli";
@@ -640,14 +641,58 @@ fn advanced() -> SettingPage {
     ]))
 }
 
-fn about() -> SettingPage {
+/// What the last update check found, and a button to check again or download.
+fn update_status(status: Status, checking_on: bool) -> SettingItem {
+    let description = match &status {
+        Status::NotChecked if checking_on => "Not checked yet.".to_owned(),
+        Status::NotChecked => "Automatic checks are off.".to_owned(),
+        Status::Checking => "Checking…".to_owned(),
+        Status::Current => "This is the newest version.".to_owned(),
+        Status::Available(version) => format!("mocli {version} is available."),
+        Status::NoRelease => "No published release was found.".to_owned(),
+        Status::Failed => "Could not check. The log has the details.".to_owned(),
+    };
+    SettingItem::new(
+        "Updates",
+        SettingField::<SharedString>::render(move |options, _, _| {
+            let button = Button::new("update").with_size(options.size());
+            match &status {
+                Status::Available(version) => button
+                    .primary()
+                    .label(format!("Download {version}"))
+                    .on_click(|_, _, cx| cx.open_url(update::RELEASES_PAGE)),
+                Status::Checking => button.outline().label("Check now").disabled(true),
+                _ => button.outline().label("Check now").on_click(|_, _, cx| {
+                    let events = cx.global::<SettingsContext>().events.clone();
+                    update::check_now(move || {
+                        let _ = events.try_send(Event::UpdateChecked);
+                    });
+                }),
+            }
+        }),
+    )
+    .description(description)
+}
+
+fn about(config: &Config) -> SettingPage {
     SettingPage::new("About").group(
         SettingGroup::new()
             .title(concat!("mocli ", env!("CARGO_PKG_VERSION")))
             .description("A clipboard history for Windows.")
-            .item(button("Source code", "Open on GitHub", |cx| {
-                cx.open_url(REPOSITORY)
-            })),
+            .items(vec![
+                switch(
+                    "Check for updates",
+                    |c| c.updates.check,
+                    |c, v| c.updates.check = v,
+                )
+                .description(
+                    "Once a day, asks GitHub whether a newer version is out. Nothing else is sent.",
+                ),
+                update_status(update::status(), config.updates.check),
+                button("Source code", "Open on GitHub", |cx| {
+                    cx.open_url(REPOSITORY)
+                }),
+            ]),
     )
 }
 
@@ -659,7 +704,7 @@ fn pages(config: &Config, protector: Option<Protector>) -> Vec<SettingPage> {
         privacy(protector),
         shortcuts(),
         advanced(),
-        about(),
+        about(config),
     ]
 }
 
