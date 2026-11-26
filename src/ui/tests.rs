@@ -366,6 +366,41 @@ fn actions_panel_runs_what_is_chosen(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn actions_panel_shows_and_takes_shortcuts(cx: &mut TestAppContext) {
+    let mut config = Config::default();
+    config.keys.insert("pin".into(), "ctrl-j".into());
+    let mut ui = Harness::configured(cx, "ui-hints", three(), config);
+    ui.press("ctrl-k");
+    // What the panel's rows show as their hints.
+    let hint = |ui: &mut Harness, action: &dyn gpui_kit::Action| {
+        ui.cx.update(|window, cx| {
+            let focused = window.focused(cx)?;
+            window
+                .highest_precedence_binding_for_action_in(action, &focused)
+                .map(|binding| binding.keystrokes()[0].inner().clone())
+        })
+    };
+    let key = |text| gpui_kit::Keystroke::parse(text).unwrap();
+    assert_eq!(hint(&mut ui, &popup::Copy), Some(key("ctrl-enter")));
+    assert_eq!(hint(&mut ui, &popup::DeleteEntry), Some(key("delete")));
+    // A configured key wins over the default.
+    assert_eq!(hint(&mut ui, &popup::TogglePin), Some(key("ctrl-j")));
+    assert_eq!(hint(&mut ui, &popup::CopyHex), None);
+
+    // And the keys work while the panel is open.
+    ui.press("ctrl-p");
+    assert!(ui.store.lock().details(ui.ids[2]).unwrap().unwrap().pinned);
+    ui.press("ctrl-k ctrl-enter");
+    assert!(matches!(
+        ui.event(),
+        Event::Activate {
+            how: Activation::Copy,
+            ..
+        }
+    ));
+}
+
+#[gpui_kit::test]
 fn deleting_many_asks_first(cx: &mut TestAppContext) {
     let mut ui = Harness::open(cx, "ui-confirm", three());
     ui.action("delete all");

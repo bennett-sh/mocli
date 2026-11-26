@@ -88,6 +88,16 @@ pub fn bind_keys(overrides: &BTreeMap<String, String>, cx: &mut App) {
         KeyBinding::new("ctrl-k", ToggleActions, Some(PANEL)),
         // Otherwise Escape would close the panel and then the popup.
         KeyBinding::new("escape", Dismiss, Some(PANEL)),
+        // The entry's shortcuts also work while the actions panel is open,
+        // which is what makes the panel show them as hints. Plain Enter
+        // stays the panel's own.
+        KeyBinding::new("shift-enter", PastePlain, Some(PANEL)),
+        KeyBinding::new("ctrl-enter", Copy, Some(PANEL)),
+        KeyBinding::new("ctrl-p", TogglePin, Some(PANEL)),
+        KeyBinding::new("delete", DeleteEntry, Some(PANEL)),
+        KeyBinding::new("ctrl-o", OpenEntry, Some(PANEL)),
+        KeyBinding::new("ctrl-e", EditEntry, Some(PANEL)),
+        KeyBinding::new("ctrl-,", OpenSettings, Some(PANEL)),
         KeyBinding::new("ctrl-enter", PasteEdited, Some(EDITOR)),
         KeyBinding::new("escape", CancelEdit, Some(EDITOR)),
     ]);
@@ -109,27 +119,37 @@ pub fn bind_keys(overrides: &BTreeMap<String, String>, cx: &mut App) {
             && keys
                 .split_whitespace()
                 .all(|stroke| Keystroke::parse(stroke).is_ok());
-        let binding = valid.then(|| binding(name, keys)).flatten();
-        match binding {
-            Some(binding) => cx.bind_keys([binding]),
-            None => tracing::warn!(action = %name, keys = %keys, "ignoring a key setting"),
+        let Some(search_binding) = valid.then(|| binding(name, keys, SEARCH)).flatten() else {
+            tracing::warn!(action = %name, keys = %keys, "ignoring a key setting");
+            continue;
+        };
+        cx.bind_keys([search_binding]);
+        // Keys without a modifier would take typing or Enter away from the
+        // panel's own search.
+        let modified = keys
+            .split_whitespace()
+            .next()
+            .and_then(|stroke| Keystroke::parse(stroke).ok())
+            .is_some_and(|stroke| stroke.modifiers.modified());
+        if modified && name != "actions" {
+            cx.bind_keys(binding(name, keys, PANEL));
         }
     }
 }
 
-/// The binding for an action named in the config.
-fn binding(name: &str, keys: &'static str) -> Option<KeyBinding> {
-    let search = Some(SEARCH);
+/// The binding for an action named in the config, in the given key context.
+fn binding(name: &str, keys: &'static str, context: &'static str) -> Option<KeyBinding> {
+    let context = Some(context);
     Some(match name {
-        "paste" => KeyBinding::new(keys, Paste, search),
-        "paste_plain" => KeyBinding::new(keys, PastePlain, search),
-        "copy" => KeyBinding::new(keys, Copy, search),
-        "actions" => KeyBinding::new(keys, ToggleActions, search),
-        "pin" => KeyBinding::new(keys, TogglePin, search),
-        "delete" => KeyBinding::new(keys, DeleteEntry, search),
-        "settings" => KeyBinding::new(keys, OpenSettings, search),
-        "next_type" => KeyBinding::new(keys, NextType, search),
-        "previous_type" => KeyBinding::new(keys, PreviousType, search),
+        "paste" => KeyBinding::new(keys, Paste, context),
+        "paste_plain" => KeyBinding::new(keys, PastePlain, context),
+        "copy" => KeyBinding::new(keys, Copy, context),
+        "actions" => KeyBinding::new(keys, ToggleActions, context),
+        "pin" => KeyBinding::new(keys, TogglePin, context),
+        "delete" => KeyBinding::new(keys, DeleteEntry, context),
+        "settings" => KeyBinding::new(keys, OpenSettings, context),
+        "next_type" => KeyBinding::new(keys, NextType, context),
+        "previous_type" => KeyBinding::new(keys, PreviousType, context),
         _ => return None,
     })
 }

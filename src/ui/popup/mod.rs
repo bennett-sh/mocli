@@ -26,6 +26,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 pub use self::keys::bind_keys;
+#[cfg(test)]
+pub(super) use self::keys::{Copy, CopyHex, DeleteEntry, TogglePin};
 use self::{
     keys::*,
     menu::{Menu, Pending},
