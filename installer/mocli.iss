@@ -45,7 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Tasks]
-Name: "startup"; Description: "{cm:AutoStartProgram,{#AppName}}"; Flags: checkedonce
+Name: "startup"; Description: "{cm:AutoStartProgram,{#AppName}}"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Files]
