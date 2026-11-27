@@ -63,8 +63,9 @@ impl Popup {
         let position = self.list.read(cx).delegate().ordinal(id).unwrap_or(0);
         let result = self.store.lock().delete(id);
         report("delete", result);
-        self.refresh(false, window, cx);
-        self.select_nth(position, window, cx);
+        // The list stays where it is; the neighbor takes the deleted row's place.
+        self.refresh_scrolling(false, false, window, cx);
+        self.select_nth_scrolling(position, false, window, cx);
     }
 
     pub(super) fn ask_delete_from_app(&mut self, window: &mut Window, cx: &mut Context<Self>) {

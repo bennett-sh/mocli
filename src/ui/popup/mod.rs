@@ -205,6 +205,17 @@ impl Popup {
 
     /// Runs the search again. With `keep`, the selected entry stays selected.
     pub fn refresh(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_scrolling(keep, true, window, cx);
+    }
+
+    /// `refresh`, optionally leaving the scroll position where it is.
+    fn refresh_scrolling(
+        &mut self,
+        keep: bool,
+        scroll: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let query = self.search.read(cx).value();
         let kinds = self
             .filter
@@ -237,7 +248,9 @@ impl Popup {
             list.set_selected_index(target.map(|(index, _)| index), window, cx);
             // The first index also scrolls its section header into view.
             let scroll_to = target.map_or_else(IndexPath::default, |(index, _)| index);
-            list.scroll_to_item(scroll_to, ScrollStrategy::Top, window, cx);
+            if scroll {
+                list.scroll_to_item(scroll_to, ScrollStrategy::Top, window, cx);
+            }
             cx.notify();
             target
         });
@@ -295,12 +308,24 @@ impl Popup {
 
     /// Selects the n-th row, or the last one if there are fewer.
     fn select_nth(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_nth_scrolling(n, true, window, cx);
+    }
+
+    fn select_nth_scrolling(
+        &mut self,
+        n: usize,
+        scroll: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let target = self.list.update(cx, |list, cx| {
             let delegate = list.delegate();
             let last = delegate.len().checked_sub(1)?;
             let target = delegate.nth(n.min(last))?;
             list.set_selected_index(Some(target.0), window, cx);
-            list.scroll_to_item(target.0, ScrollStrategy::Top, window, cx);
+            if scroll {
+                list.scroll_to_item(target.0, ScrollStrategy::Top, window, cx);
+            }
             cx.notify();
             Some(target)
         });
